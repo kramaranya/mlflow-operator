@@ -467,47 +467,57 @@ jobs:
           custom_data: '{\"HTML Report\": \"${{ steps.upload-report.outputs.artifact-url }}\"}'
         continue-on-error: true
 
-      - name: Collect debug logs
+      - name: Collect integration debug logs
         id: collect-logs
-        if: ${{ steps.run-tests.outcome != 'success' && !cancelled() }}
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        env:
+          DEBUG_NAMESPACE: ${{ steps.deploy-mlflow.outputs.namespace || env.NAMESPACE }}
+        shell: bash
         run: |
           echo "🔍 Collecting debug information..."
-
-          # Create debug directory
           mkdir -p debug-logs
 
-          # Collect Kubernetes logs
-          kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -o wide > debug-logs/pods.txt
-          kubectl get svc -n "${{ steps.deploy-mlflow.outputs.namespace }}" -o wide > debug-logs/services.txt
-          kubectl get events -n "${{ steps.deploy-mlflow.outputs.namespace }}" --sort-by='.lastTimestamp' > debug-logs/events.txt
+          kubectl get namespaces > debug-logs/namespaces.txt 2>&1 || true
 
-          # Collect MLflow logs
-          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=mlflow -o jsonpath='{.items[*].metadata.name}'); do
-            echo "📋 Collecting logs for pod: $pod"
-            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+          if ! kubectl get namespace "${DEBUG_NAMESPACE}" >/dev/null 2>&1; then
+            echo "Namespace ${DEBUG_NAMESPACE} not found; skipping namespace-scoped debug collection." > debug-logs/namespace.txt
+            exit 0
+          fi
+
+          kubectl get mlflow -n "${DEBUG_NAMESPACE}" -o yaml > debug-logs/mlflow-cr.yaml 2>&1 || true
+          kubectl get pods -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/pods.txt 2>&1 || true
+          kubectl get deployments -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/deployments.txt 2>&1 || true
+          kubectl get jobs -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/jobs.txt 2>&1 || true
+          kubectl get svc -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/services.txt 2>&1 || true
+          kubectl get events -n "${DEBUG_NAMESPACE}" --sort-by='.lastTimestamp' > debug-logs/events.txt 2>&1 || true
+
+          for deployment in mlflow controller-manager; do
+            kubectl describe deployment "${deployment}" -n "${DEBUG_NAMESPACE}" > "debug-logs/${deployment}-deployment.describe.txt" 2>&1 || true
           done
 
-          # Collect operator logs
-          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l control-plane=controller-manager -o jsonpath='{.items[*].metadata.name}'); do
-            echo "📋 Collecting logs for operator pod: $pod"
-            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}-operator.log" 2>&1 || echo "Failed to get logs for $pod"
-          done
+          while IFS='|' read -r label suffix; do
+            mapfile -t PODS < <(kubectl get pods -n "${DEBUG_NAMESPACE}" -l "${label}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | sed '/^$/d')
+            if [[ "${#PODS[@]}" -eq 0 ]]; then
+              continue
+            fi
 
-          # Collect SeaweedFS logs
-          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=seaweedfs -o jsonpath='{.items[*].metadata.name}'); do
-            echo "📋 Collecting logs for SeaweedFS pod: $pod"
-            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}-seaweedfs.log" 2>&1 || echo "Failed to get logs for $pod"
-          done
+            for pod in "${PODS[@]}"; do
+              echo "📋 Collecting logs for pod: ${pod}"
+              kubectl describe pod "${pod}" -n "${DEBUG_NAMESPACE}" > "debug-logs/${pod}${suffix}.describe.txt" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true > "debug-logs/${pod}${suffix}.log" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true --previous > "debug-logs/${pod}${suffix}.previous.log" 2>&1 || true
+            done
+          done <<'EOF'
+          app=mlflow|
+          control-plane=controller-manager|-operator
+          app=seaweedfs|-seaweedfs
+          app=mlflow-postgres|-postgres
+          EOF
 
-          # Collect PostgreSQL logs
-          for pod in $(kubectl get pods -n "${{ steps.deploy-mlflow.outputs.namespace }}" -l app=mlflow-postgres -o jsonpath='{.items[*].metadata.name}'); do
-            echo "📋 Collecting logs for PostgreSQL pod: $pod"
-            kubectl logs "$pod" -n "${{ steps.deploy-mlflow.outputs.namespace }}" > "debug-logs/${pod}-postgres.log" 2>&1 || echo "Failed to get logs for $pod"
-          done
-
-      - name: Upload debug logs
+      - name: Upload integration debug logs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: ${{ steps.collect-logs.outcome == 'success' && !cancelled() }}
+        if: ${{ failure() && !cancelled() }}
         with:
           name: debug-logs-${{ matrix.k8s_version }}-${{ matrix.backend_store }}-${{ matrix.registry_store }}-${{ matrix.artifact_storage }}-${{ matrix.serve_artifacts }}-${{ matrix.python_version }}-postgres_tls_${{ matrix.postgres_tls || 'false' }}-seaweedfs_tls_${{ matrix.seaweedfs_tls || 'false' }}
           path: debug-logs/
@@ -679,3 +689,58 @@ jobs:
 
       - name: Run upgrade e2e tests
         run: make test-e2e-upgrade E2E_IMG=${{ env.UPGRADE_OPERATOR_IMAGE }} MLFLOW_SEED_IMAGE=${{ env.MLFLOW_SEED_IMAGE }}
+
+      - name: Collect upgrade debug logs
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        env:
+          DEBUG_NAMESPACE: ${{ env.NAMESPACE }}
+        shell: bash
+        run: |
+          echo "🔍 Collecting upgrade debug information..."
+          mkdir -p debug-logs
+
+          kubectl get namespaces > debug-logs/namespaces.txt 2>&1 || true
+
+          if ! kubectl get namespace "${DEBUG_NAMESPACE}" >/dev/null 2>&1; then
+            echo "Namespace ${DEBUG_NAMESPACE} not found; skipping namespace-scoped debug collection." > debug-logs/namespace.txt
+            exit 0
+          fi
+
+          kubectl get mlflow -n "${DEBUG_NAMESPACE}" -o yaml > debug-logs/mlflow-cr.yaml 2>&1 || true
+          kubectl get pods -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/pods.txt 2>&1 || true
+          kubectl get deployments -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/deployments.txt 2>&1 || true
+          kubectl get jobs -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/jobs.txt 2>&1 || true
+          kubectl get svc -n "${DEBUG_NAMESPACE}" -o wide > debug-logs/services.txt 2>&1 || true
+          kubectl get events -n "${DEBUG_NAMESPACE}" --sort-by='.lastTimestamp' > debug-logs/events.txt 2>&1 || true
+
+          for deployment in mlflow controller-manager; do
+            kubectl describe deployment "${deployment}" -n "${DEBUG_NAMESPACE}" > "debug-logs/${deployment}-deployment.describe.txt" 2>&1 || true
+          done
+
+          while IFS='|' read -r label suffix; do
+            mapfile -t PODS < <(kubectl get pods -n "${DEBUG_NAMESPACE}" -l "${label}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | sed '/^$/d')
+            if [[ "${#PODS[@]}" -eq 0 ]]; then
+              continue
+            fi
+
+            for pod in "${PODS[@]}"; do
+              echo "📋 Collecting logs for pod: ${pod}"
+              kubectl describe pod "${pod}" -n "${DEBUG_NAMESPACE}" > "debug-logs/${pod}${suffix}.describe.txt" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true > "debug-logs/${pod}${suffix}.log" 2>&1 || true
+              kubectl logs "${pod}" -n "${DEBUG_NAMESPACE}" --all-containers=true --previous > "debug-logs/${pod}${suffix}.previous.log" 2>&1 || true
+            done
+          done <<'EOF'
+          app=mlflow|
+          control-plane=controller-manager|-operator
+          app=seaweedfs|-seaweedfs
+          app=mlflow-postgres|-postgres
+          EOF
+
+      - name: Upload upgrade debug logs
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-debug-logs-${{ matrix.backend_store }}
+          path: debug-logs/
+          retention-days: 7
