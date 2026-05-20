@@ -401,7 +401,7 @@ Validates sample CRs on every PR:
 - `verify-codegen.yml` - Validates generated code is up-to-date
 - `test.yml` - Runs unit tests
 - `lint.yml` - Runs golangci-lint
-- `integration-tests.yml` - Unified MLflow runtime workflow. In `red-hat-data-services`, it builds one MLflow image artifact from the aligned branch of `red-hat-data-services/mlflow` using `Dockerfile.konflux`, then reuses that same artifact for integration tests, version-alignment checks, and upgrade tests. In `opendatahub-io`, the same shared workflow file keeps the existing `odh-stable` behavior for those checks on push and PR events.
+- `integration-tests.yml` - Unified MLflow runtime workflow. In `red-hat-data-services`, it builds one MLflow image artifact from the matching `red-hat-data-services/mlflow` branch for the operator branch under test, then reuses that same artifact for integration tests, version-alignment checks, and upgrade tests. In `opendatahub-io`, the same shared workflow file keeps the existing `odh-stable` behavior for push and PR events while still running the daily version-alignment check schedule.
 - `test-e2e.yml` - Runs end-to-end tests
 - `verify-kustomize.yml` - Validates kustomize overlays
 

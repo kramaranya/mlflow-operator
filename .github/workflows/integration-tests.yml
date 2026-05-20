@@ -60,6 +60,9 @@ on:
         default: true
         type: boolean
 
+  schedule:
+    - cron: '0 10 * * *'
+
   push:
     branches:
       - main
@@ -68,6 +71,8 @@ on:
 
 jobs:
   build-rhds-mlflow-image:
+    permissions:
+      contents: read
     name: Build RHDS MLflow image
     runs-on: ubuntu-latest
     outputs:
@@ -79,7 +84,7 @@ jobs:
         shell: bash
         env:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
-          SOURCE_REF: ${{ github.base_ref || github.ref_name }}
+          SOURCE_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
           if [[ "$REPOSITORY_OWNER" == "red-hat-data-services" ]]; then
@@ -95,6 +100,7 @@ jobs:
           repository: red-hat-data-services/mlflow
           ref: ${{ steps.configure.outputs.source_ref }}
           path: mlflow-upstream
+          persist-credentials: false
 
       - name: Build MLflow image archive
         if: ${{ steps.configure.outputs.built == 'true' }}
@@ -114,6 +120,9 @@ jobs:
 
   integration-tests:
     needs: build-rhds-mlflow-image
+    if: ${{ github.event_name != 'schedule' }}
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -155,6 +164,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Python ${{ matrix.python_version }}
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -202,7 +213,11 @@ jobs:
           elif [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
             echo "image=quay.io/opendatahub/mlflow:odh-stable" >> "$GITHUB_OUTPUT"
           else
-            echo "image=quay.io/opendatahub/mlflow:$BRANCH" >> "$GITHUB_OUTPUT"
+            SANITIZED_BRANCH=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's#[/]+#-#g; s#[^a-z0-9._-]#-#g; s#^[.-]+##' | cut -c1-128)
+            if [[ -z "$SANITIZED_BRANCH" ]]; then
+              SANITIZED_BRANCH='branch'
+            fi
+            echo "image=quay.io/opendatahub/mlflow:${SANITIZED_BRANCH}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Download RHDS MLflow image artifact
@@ -453,7 +468,7 @@ jobs:
         run: exit 1
 
   verify-mlflow-version-alignment:
-    if: ${{ github.event_name != 'workflow_dispatch' && (github.repository_owner == 'red-hat-data-services' || (github.repository_owner == 'opendatahub-io' && (github.ref_name == 'main' || github.base_ref == 'main'))) }}
+    if: ${{ github.event_name != 'workflow_dispatch' && ((github.repository_owner == 'red-hat-data-services' && github.event_name != 'schedule') || (github.repository_owner == 'opendatahub-io' && (github.event_name == 'schedule' || github.ref_name == 'main' || github.base_ref == 'main'))) }}
     needs: build-rhds-mlflow-image
     permissions:
       contents: read
@@ -461,6 +476,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Download RHDS MLflow image artifact
         if: ${{ github.repository_owner == 'red-hat-data-services' }}
@@ -490,7 +507,7 @@ jobs:
             --params-env config/overlays/kind/params.env
 
   upgrade-tests:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' }}
     needs: build-rhds-mlflow-image
     name: Run upgrade path (${{ matrix.backend_store }})
     runs-on: ubuntu-latest
@@ -504,6 +521,8 @@ jobs:
     steps:
       - name: Clone the code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
