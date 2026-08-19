@@ -699,7 +699,7 @@ spec:
     schedule: "0 0 1 1 *"
     location: "file:///mlflow/traces"
     retention: "30d"`,
-				"storage must be configured when traceArchival.location uses file-based storage",
+				"enabled file-based traceArchival.location requires storage with ReadWriteMany",
 				"Should fail to create MLflow with file-based archival location without storage",
 			)
 		})
