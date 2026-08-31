@@ -174,7 +174,7 @@ mlflow:
   # Leave empty for direct access without a prefix
   staticPrefix: ""
 
-# Optional dedicated artifacts-only MLflow server. The operator supplies artifactRoot from
+# Optional dedicated metadata-aware artifact-serving MLflow server. The operator supplies artifactRoot from
 # its external gateway URL and creates the matching HTTPRoute. Standalone chart users must
 # expose the Service themselves and set artifactRoot to that externally reachable artifact API.
 # Operator deployments keep port, staticPrefix, TLS, and Service settings fixed so they stay
@@ -182,12 +182,13 @@ mlflow:
 # Dedicated serving requires remote SQL metadata stores and does not mount storage in the
 # tracking pod. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot
 # be inspected by Helm and must resolve to remote SQL.
-# The image must support combining --artifacts-only with --enable-workspaces and an explicit
-# --workspace-store-uri (upstream mlflow/mlflow#24452). Stock upstream v3.14.0 does not.
+# The server uses --serve-artifacts and the same metadata stores as the tracking server so UI
+# artifact handlers can resolve runs, model versions, traces, and logged models. Server-side
+# job execution remains disabled.
 artifactsServer:
   enabled: false
   replicaCount: 1
-  # Storage destination used by the artifacts-only server. A file:// destination requires
+  # Storage destination used by the artifact server. A file:// destination requires
   # storage.enabled=true. One replica may use ReadWriteOnce; multiple replicas require
   # storage.accessMode=ReadWriteMany.
   artifactsDestination: "file:///mlflow/artifacts"
@@ -218,8 +219,8 @@ artifactsServer:
     annotations: {}
 
 # Environment variables shared by the MLflow containers.
-# Supports both direct values and references to secrets/configmaps. The artifacts-only
-# container clears metadata-store URI variables that are incompatible with that mode.
+# Supports both direct values and references to secrets/configmaps. Tracking and artifact
+# containers receive the same metadata-store and artifact-storage environment.
 env:
   - name: MLFLOW_LOGGING_LEVEL
     value: INFO

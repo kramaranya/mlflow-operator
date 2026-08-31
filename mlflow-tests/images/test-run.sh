@@ -97,6 +97,9 @@ Operator / OpenShift:
                           (default: auto-detect OpenShift via route.openshift.io, else base)
   FORCE_PORT_FORWARD      true|false — always port-forward the MLflow service to localhost,
                           even on OpenShift (default: false)
+  ARTIFACTS_SERVER        true|false — enable and test the dedicated metadata-aware artifact
+                          server (default: false). Requires OpenShift Gateway routing,
+                          PostgreSQL backend/registry stores, and one S3 backend.
 
 Skip / control flags:
   SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false)
@@ -370,6 +373,7 @@ CLEANUP_REUSED_RESOURCES="${CLEANUP_REUSED_RESOURCES:-false}"
 FAIL_FAST="${FAIL_FAST:-true}"
 FORCE_PORT_FORWARD="${FORCE_PORT_FORWARD:-false}"
 SERVE_ARTIFACTS="${SERVE_ARTIFACTS:-${serve_artifacts:-true}}"
+ARTIFACTS_SERVER="${ARTIFACTS_SERVER:-false}"
 OVERALL_EXIT=0
 
 ARTIFACT_BACKENDS_CONFIGURED=false
@@ -430,6 +434,26 @@ if [ -z "${INFRASTRUCTURE_PLATFORM:-}" ]; then
     fi
 fi
 
+if [ "$ARTIFACTS_SERVER" = "true" ]; then
+    if [ "$INFRASTRUCTURE_PLATFORM" != "openshift" ]; then
+        echo "ERROR: ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster." >&2
+        exit 1
+    fi
+    if [ "$FORCE_PORT_FORWARD" = "true" ]; then
+        echo "ERROR: ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
+        exit 1
+    fi
+    if [ "$BACKEND_STORE" != "postgres" ] || [ "$REGISTRY_STORE" != "postgres" ]; then
+        echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
+        exit 1
+    fi
+    if [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ] || { [ "${_resolved_backends[0]}" != "s3" ] && [ "${_resolved_backends[0]}" != "externals3" ]; }; then
+        echo "ERROR: ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend." >&2
+        exit 1
+    fi
+    SERVE_ARTIFACTS=false
+fi
+
 # Infrastructure image overrides
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-}"
 SEAWEEDFS_IMAGE="${SEAWEEDFS_IMAGE:-}"
@@ -448,7 +472,9 @@ S3_ENDPOINT_URL="${S3_ENDPOINT_URL:-${AWS_DEFAULT_ENDPOINT:-}}"
 # Leave empty to let deploy.py use its default ("disable" for self-deployed postgres).
 DB_SSLMODE="${DB_SSLMODE:-}"
 
-RANDOM_SUFFIX=$(head /dev/urandom | tr -dc a-z0-9 | head -c 8)
+# LC_ALL=C is required: macOS tr treats /dev/urandom as UTF-8 and exits with
+# "Illegal byte sequence" under a UTF-8 locale (set -e then aborts the script).
+RANDOM_SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)
 WORKSPACE_LIST="${workspaces:-workspace1-${RANDOM_SUFFIX},workspace2-${RANDOM_SUFFIX}}"
 if [ -n "$INFERRED_UPGRADE_PHASE" ]; then
     WORKSPACE_LIST="$UPGRADE_TEST_WORKSPACE"
@@ -629,6 +655,47 @@ wait_for_mlflow_server_info() {
     done
 }
 
+wait_for_artifacts_server_route() {
+    echo "  Waiting for the dedicated artifact Deployment and Gateway route..."
+    if ! kubectl wait --for=condition=Available deployment/mlflow-artifacts \
+        --namespace "$NAMESPACE" --timeout=300s; then
+        echo "ERROR: mlflow-artifacts Deployment did not become available" >&2
+        collect_debug_logs "artifact deployment readiness failure"
+        return 1
+    fi
+
+    local retry=0
+    local max_retries=60
+    local route_conditions=""
+    until route_conditions=$(kubectl get httproute mlflow-artifacts -n "$NAMESPACE" \
+        -o jsonpath='{range .status.parents[*].conditions[*]}{.type}={.status}{"\n"}{end}' 2>/dev/null) && \
+        grep -qx "Accepted=True" <<<"$route_conditions" && \
+        grep -qx "ResolvedRefs=True" <<<"$route_conditions"; do
+        retry=$((retry + 1))
+        if [ "$retry" -ge "$max_retries" ]; then
+            echo "ERROR: mlflow-artifacts HTTPRoute was not accepted within timeout" >&2
+            collect_debug_logs "artifact route acceptance failure"
+            return 1
+        fi
+        sleep 5
+    done
+
+    local artifacts_url=""
+    retry=0
+    max_retries=12
+    until artifacts_url=$(kubectl get mlflow "$MLFLOW_NAME" -o jsonpath='{.status.artifactsUrl}' 2>/dev/null) && \
+        [ -n "$artifacts_url" ]; do
+        retry=$((retry + 1))
+        if [ "$retry" -ge "$max_retries" ]; then
+            echo "ERROR: MLflow CR status.artifactsUrl is empty with ARTIFACTS_SERVER=true" >&2
+            collect_debug_logs "artifact route URL failure"
+            return 1
+        fi
+        sleep 5
+    done
+    echo "  Artifact route accepted; status.artifactsUrl=$artifacts_url"
+}
+
 should_cleanup_reused_resources() {
     local cleanup_status="${1:-${OVERALL_EXIT:-0}}"
     case "$CLEANUP_REUSED_RESOURCES" in
@@ -799,6 +866,7 @@ run_suite() {
             --platform              "$INFRASTRUCTURE_PLATFORM"
             --serve-artifacts       "$SERVE_ARTIFACTS"
         )
+        [ "$ARTIFACTS_SERVER" = "true" ] && deploy_args+=(--artifacts-server)
         [ -n "${MLFLOW_RESOLVED_IMAGE}" ] && deploy_args+=(--mlflow-image "$MLFLOW_RESOLVED_IMAGE")
 
         [ -n "${POSTGRES_IMAGE:-}"  ] && deploy_args+=(--postgres-image  "$POSTGRES_IMAGE")
@@ -979,6 +1047,9 @@ run_suite() {
     if ! wait_for_mlflow_server_info; then
         return 1
     fi
+    if [ "$ARTIFACTS_SERVER" = "true" ] && ! wait_for_artifacts_server_route; then
+        return 1
+    fi
 
     if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then
         echo "  Waiting for MLflow CR status.version to reach ${SUPPORTED_MLFLOW_VERSION_RAW}..."
@@ -1036,6 +1107,8 @@ run_suite() {
     # Config.SERVE_ARTIFACTS stays in sync if the default ever changes.
     export serve_artifacts="${SERVE_ARTIFACTS}"
     export TRACE_ARCHIVAL_RETENTION
+    export artifacts_server="${ARTIFACTS_SERVER}"
+    export mlflow_namespace="${NAMESPACE}"
     export AWS_S3_BUCKET="${AWS_S3_BUCKET:-${BUCKET:-}}"
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"

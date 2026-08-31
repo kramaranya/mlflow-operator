@@ -55,6 +55,52 @@ class MLflowDeployer:
         """Return the repo path for CI/local-test-only manifests."""
         return self.ci_test_infra_root.joinpath(*parts)
 
+    def _set_env_file_value(self, path: Path, key: str, value: str, description=None) -> None:
+        """Set KEY=value in a params.env file without GNU sed -i (breaks on macOS)."""
+        if description:
+            print(f"📋 {description}")
+        text = path.read_text()
+        lines = text.splitlines()
+        prefix = f"{key}="
+        replaced = False
+        for i, line in enumerate(lines):
+            if line.startswith(prefix):
+                lines[i] = f"{prefix}{value}"
+                replaced = True
+                break
+        if not replaced:
+            lines.append(f"{prefix}{value}")
+        path.write_text("\n".join(lines) + "\n")
+
+    def _print_and_require_cluster(self) -> None:
+        """Show which API kubectl will hit, and refuse OpenShift deploys to localhost."""
+        context = self.run_command(
+            ["kubectl", "config", "current-context"],
+            capture_output=True, check=False,
+        )
+        server = self.run_command(
+            ["kubectl", "config", "view", "--minify",
+             "-o", "jsonpath={.clusters[0].cluster.server}"],
+            capture_output=True, check=False,
+        )
+        context_name = (context.stdout or "").strip() if context else ""
+        server_url = (server.stdout or "").strip() if server else ""
+        print(f"  kubectl context: {context_name or '(unknown)'}")
+        print(f"  kubectl server:  {server_url or '(unknown)'}")
+        if self.args.platform != "openshift":
+            return
+        lowered = server_url.lower()
+        if (not server_url or "localhost" in lowered or "127.0.0.1" in lowered
+                or "[::1]" in lowered):
+            raise ValueError(
+                "kubectl is not talking to an OpenShift API. "
+                "Align it with `oc` before rerunning, for example:\n"
+                "  kubectl config current-context\n"
+                "  oc whoami --show-server\n"
+                "  kubectl config use-context "
+                "$(oc config current-context)"
+            )
+
     def run_command(self,
                     cmd: Union[str, List[str]],
                     description=None,
@@ -148,14 +194,23 @@ class MLflowDeployer:
             check=False, capture_output=True
         )
 
-        if result and result.stdout and "Active" in result.stdout:
+        if result and result.returncode == 0 and result.stdout and "Active" in result.stdout:
             print(f"✅ Namespace '{self.args.namespace}' already exists")
-        else:
-            # Namespace doesn't exist, create it
-            self.run_command(
-                f"kubectl create namespace {self.args.namespace}",
-                f"Creating namespace {self.args.namespace}"
-            )
+            return
+        create = self.run_command(
+            f"kubectl create namespace {self.args.namespace}",
+            f"Creating namespace {self.args.namespace}",
+            check=False,
+        )
+        if create and create.returncode == 0:
+            return
+        combined = ((create.stdout if create else "") or "")
+        if "AlreadyExists" in combined:
+            print(f"✅ Namespace '{self.args.namespace}' already exists")
+            return
+        raise RuntimeError(
+            f"Failed to create namespace '{self.args.namespace}': {combined.strip()}"
+        )
 
     def generate_tls_certificates(self):
         """Generate TLS certificates for MLflow operator deployment"""
@@ -213,13 +268,14 @@ class MLflowDeployer:
         base_params_env = self.ci_test_infra_path("overlays", "kind", "params.env")
         print(f"📝 Updating operator namespace to '{self.args.namespace}' in {base_params_env}")
 
-        self.run_command([
-            "sed", "-i", f"s#NAMESPACE=.*#NAMESPACE={self.args.namespace}#", str(base_params_env)
-        ], f"Setting operator namespace to {self.args.namespace}")
-
-        self.run_command([
-            "sed", "-i", f"s#MLFLOW_OPERATOR_IMAGE=.*#MLFLOW_OPERATOR_IMAGE={self.args.mlflow_operator_image}#", str(base_params_env)
-        ], f"Setting operator image to {self.args.mlflow_operator_image}")
+        self._set_env_file_value(
+            base_params_env, "NAMESPACE", self.args.namespace,
+            f"Setting operator namespace to {self.args.namespace}",
+        )
+        self._set_env_file_value(
+            base_params_env, "MLFLOW_OPERATOR_IMAGE", self.args.mlflow_operator_image,
+            f"Setting operator image to {self.args.mlflow_operator_image}",
+        )
 
         # Generate TLS certificates before building with kustomize
         self.generate_tls_certificates()
@@ -415,10 +471,10 @@ class MLflowDeployer:
         seaweedfs_path = self.ci_test_infra_path("seaweedfs", platform_overlay)
         seaweedfs_params_env = self.ci_test_infra_path("seaweedfs", "base", "params.env")
 
-        self.run_command([
-            "sed", "-i", f"s#SEAWEEDFS_IMAGE=.*#SEAWEEDFS_IMAGE={self.args.seaweedfs_image}#",
-            str(seaweedfs_params_env),
-        ], f"Setting seaweedfs image to {self.args.seaweedfs_image}")
+        self._set_env_file_value(
+            seaweedfs_params_env, "SEAWEEDFS_IMAGE", self.args.seaweedfs_image,
+            f"Setting seaweedfs image to {self.args.seaweedfs_image}",
+        )
 
 
         # Note: base params.env namespace already updated by deploy_mlflow_operator()
@@ -711,10 +767,10 @@ class MLflowDeployer:
         postgres_path = self.ci_test_infra_path("postgres", platform_overlay)
         postgres_params_env = self.ci_test_infra_path("postgres", "base", "params.env")
 
-        self.run_command([
-            "sed", "-i", f"s#POSTGRES_IMAGE=.*#POSTGRES_IMAGE={self.args.postgres_image}#",
-            str(postgres_params_env),
-        ], f"Setting postgres image to {self.args.postgres_image}")
+        self._set_env_file_value(
+            postgres_params_env, "POSTGRES_IMAGE", self.args.postgres_image,
+            f"Setting postgres image to {self.args.postgres_image}",
+        )
 
         # Note: PostgreSQL overlay doesn't use namespace parameter, so we apply directly to target namespace
         cmd = f"cd {postgres_path} && kustomize build . | kubectl apply -n {self.args.namespace} -f -"
@@ -839,6 +895,11 @@ class MLflowDeployer:
                 not self.args.artifacts_destination.startswith("file://")):
                 # For non-file storage, defaultArtifactRoot should be a subdirectory
                 mlflow_cr["spec"]["defaultArtifactRoot"] = f"{self.args.artifacts_destination}/runs"
+
+        if self.args.artifacts_server:
+            mlflow_cr["spec"]["serveArtifacts"] = False
+            mlflow_cr["spec"].pop("defaultArtifactRoot", None)
+            mlflow_cr["spec"]["artifactsServer"] = {"enabled": True}
 
         selector = (self.args.workspace_label_selector or "").strip()
         if selector:
@@ -998,14 +1059,19 @@ class MLflowDeployer:
 
 
     def get_pods_for_deployment(self, deployment_name, namespace):
-        """Get pod names for a given deployment"""
+        """Get pod names using the deployment's selector, not the Deployment name."""
         try:
-            pod_names = self.run_command(
-                f"kubectl get pods -l app={deployment_name} -n {namespace} "
-                f"-o jsonpath='{{.items[*].metadata.name}}'",
+            app_label = self.run_command(
+                f"kubectl get deploy {deployment_name} -n {namespace} "
+                f"-o jsonpath='{{.spec.selector.matchLabels.app}}'",
                 check=False, capture_output=True
             )
-            return pod_names.stdout.split() if pod_names and pod_names.stdout else []
+            selector = (
+                app_label.stdout.strip()
+                if app_label and app_label.returncode == 0 and app_label.stdout
+                else deployment_name
+            )
+            return self.get_pods_with_label_selector(f"app={selector}", namespace)
         except Exception as e:
             print(f"❌ Failed to get pods for deployment {deployment_name}: {e}")
             return []
@@ -1018,7 +1084,9 @@ class MLflowDeployer:
                 f"-o jsonpath='{{.items[*].metadata.name}}'",
                 check=False, capture_output=True
             )
-            return pod_names.stdout.split() if pod_names and pod_names.stdout else []
+            if not pod_names or pod_names.returncode != 0 or not pod_names.stdout:
+                return []
+            return [name for name in pod_names.stdout.split() if name]
         except Exception as e:
             print(f"❌ Failed to get pods with selector {label_selector}: {e}")
             return []
@@ -1212,6 +1280,23 @@ class MLflowDeployer:
                 print(f"⚠️  Pod {pod_name} is not ready for log retrieval yet")
 
     def _validate_args(self):
+        # The split artifact server is deliberately constrained to the topology supported by
+        # the operator validation and exercised by the Gateway integration test.
+        if self.args.artifacts_server:
+            invalid = []
+            if self.args.platform != "openshift":
+                invalid.append("--platform openshift")
+            if self.args.backend_store != "postgres":
+                invalid.append("--backend-store postgres")
+            if self.args.registry_store != "postgres":
+                invalid.append("--registry-store postgres")
+            if self.args.artifact_storage not in ("s3", "externals3"):
+                invalid.append("--artifact-storage s3 or externals3")
+            if invalid:
+                raise ValueError(
+                    "--artifacts-server requires " + ", ".join(invalid)
+                )
+
         if self.args.artifact_storage == "externals3":
             missing = []
             if not self.args.s3_access_key:
@@ -1270,11 +1355,13 @@ class MLflowDeployer:
         print(f"  Registry Store: {self.args.registry_store}")
         print(f"  Artifact Storage: {self.args.artifact_storage}")
         print(f"  Serve Artifacts: {self.args.serve_artifacts}")
+        print(f"  Dedicated Artifacts Server: {self.args.artifacts_server}")
         if self.args.artifact_storage in ("s3", "externals3"):
             print(
                 "  Trace Archival: enabled "
                 f"(s3://{self.args.s3_bucket}/trace-archive, retention={self.args.trace_archival_retention})"
             )
+        self._print_and_require_cluster()
         print()
 
         # Write all GitHub Actions outputs immediately so they're available even if
@@ -1376,6 +1463,8 @@ def main():
                             "'externals3' (external S3 via caller-supplied AWS_* credentials, no SeaweedFS deployed)")
     parser.add_argument("--serve-artifacts", choices=["true", "false"],
                        default="true", help="Whether to serve artifacts")
+    parser.add_argument("--artifacts-server", action="store_true", default=False,
+                       help="Enable the dedicated metadata-aware artifact server")
 
     # Custom URIs
     parser.add_argument("--backend-store-uri", default="sqlite:////mlflow/mlflow.db")
@@ -1405,11 +1494,16 @@ def main():
                             "overlay: 'base' uses the platform-agnostic overlay, "
                             "'openshift' uses the OpenShift overlay with platform-specific patches.")
 
-    # Infrastructure images (override to avoid Docker Hub rate limits)
-    parser.add_argument("--postgres-image", default="postgres:13",
-                       help="PostgreSQL container image (default: postgres:13)")
-    parser.add_argument("--seaweedfs-image", default="chrislusf/seaweedfs:4.07",
-                       help="SeaweedFS container image (default: chrislusf/seaweedfs:4.07)")
+    # Infrastructure images (override to avoid Docker Hub rate limits).
+    # The OpenShift overlay patches in RHEL POSTGRESQL_* env vars and
+    # /var/lib/pgsql paths; those only work with registry.redhat.io/rhel9/postgresql-*.
+    parser.add_argument("--postgres-image", default=None,
+                       help="PostgreSQL container image. Default: postgres:13 on base, "
+                            "registry.redhat.io/rhel9/postgresql-13:latest on OpenShift")
+    parser.add_argument("--seaweedfs-image", default=None,
+                       help="SeaweedFS container image. Default: docker.io/chrislusf/seaweedfs:4.07 on "
+                            "base, ghcr.io/chrislusf/seaweedfs:4.07 on OpenShift (avoids Docker Hub "
+                            "short-name mode and unauthenticated rate limits)")
 
     # PostgreSQL configuration
     parser.add_argument("--postgres-sslmode", default=None,
@@ -1438,6 +1532,26 @@ def main():
     parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()
+
+    if args.postgres_image is None:
+        if args.platform == "openshift":
+            args.postgres_image = "registry.redhat.io/rhel9/postgresql-13:latest"
+        else:
+            args.postgres_image = "postgres:13"
+
+    if args.seaweedfs_image is None:
+        if args.platform == "openshift":
+            # GHCR is the upstream publish target and avoids Docker Hub rate limits.
+            args.seaweedfs_image = "ghcr.io/chrislusf/seaweedfs:4.07"
+        else:
+            args.seaweedfs_image = "docker.io/chrislusf/seaweedfs:4.07"
+
+    # OpenShift cri-o short-name mode rejects docker.io short names such as
+    # chrislusf/seaweedfs:4.07 (ImageInspectError / ambiguous list).
+    if args.platform == "openshift" and "/" in args.seaweedfs_image:
+        registry = args.seaweedfs_image.split("/", 1)[0]
+        if "." not in registry and ":" not in registry and registry != "localhost":
+            args.seaweedfs_image = f"docker.io/{args.seaweedfs_image}"
 
     # Apply SeaweedFS defaults for self-deployed S3 storage if not provided
     if args.artifact_storage == "s3":

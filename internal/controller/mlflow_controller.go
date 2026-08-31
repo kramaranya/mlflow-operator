@@ -204,8 +204,9 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// Clean up dedicated artifact-serving resources when split serving is disabled.
-	if !isArtifactsServerEnabled(mlflow) {
+	// Keep a disabling artifact Deployment available for migration quiescence; remove it after
+	// the migration and post-migration tracking rollout have completed.
+	if !isArtifactsServerEnabled(mlflow) && !migrationRequested(mlflow) {
 		resourceName := ArtifactsResourceName + getResourceSuffix(mlflow.Name)
 		artifactResources := []struct {
 			obj  client.Object

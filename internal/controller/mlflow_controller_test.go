@@ -417,7 +417,7 @@ var _ = Describe("MLflow Controller", func() {
 			artifactKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: "opendatahub"}
 			artifactRoute := &gatewayv1.HTTPRoute{}
 			Expect(k8sClient.Get(ctx, artifactKey, artifactRoute)).To(Succeed())
-			Expect(artifactRoute.Spec.Rules).To(HaveLen(2))
+			Expect(artifactRoute.Spec.Rules).To(HaveLen(10))
 
 			legacyRule := artifactRoute.Spec.Rules[0]
 			Expect(legacyRule.Matches).To(HaveLen(1))
@@ -442,7 +442,29 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(legacyRule.BackendRefs[0].Weight).NotTo(BeNil())
 			Expect(*legacyRule.BackendRefs[0].Weight).To(Equal(int32(1)))
 
-			artifactRule := artifactRoute.Spec.Rules[1]
+			expectedUIRewrites := map[string]string{
+				"/mlflow/get-artifact":                           "/mlflow-artifacts/get-artifact",
+				"/mlflow/model-versions/get-artifact":            "/mlflow-artifacts/model-versions/get-artifact",
+				"/mlflow/ajax-api/2.0/mlflow/artifacts/list":     "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",
+				"/mlflow/ajax-api/2.0/mlflow/upload-artifact":    "/mlflow-artifacts/ajax-api/2.0/mlflow/upload-artifact",
+				"/mlflow/ajax-api/2.0/mlflow/get-artifact":       "/mlflow-artifacts/ajax-api/2.0/mlflow/get-artifact",
+				"/mlflow/ajax-api/2.0/mlflow/get-trace-artifact": "/mlflow-artifacts/ajax-api/2.0/mlflow/get-trace-artifact",
+				"/mlflow/ajax-api/3.0/mlflow/get-trace-artifact": "/mlflow-artifacts/ajax-api/3.0/mlflow/get-trace-artifact",
+				"/mlflow/ajax-api/2.0/mlflow/logged-models/":     "/mlflow-artifacts/ajax-api/2.0/mlflow/logged-models/",
+			}
+			for _, rule := range artifactRoute.Spec.Rules[1:9] {
+				Expect(rule.Matches).To(HaveLen(1))
+				match := *rule.Matches[0].Path.Value
+				replacement, found := expectedUIRewrites[match]
+				Expect(found).To(BeTrue(), "unexpected UI artifact match %s", match)
+				Expect(rule.Filters).To(HaveLen(1))
+				Expect(*rule.Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(replacement))
+				Expect(rule.BackendRefs[0].Name).To(Equal(gatewayv1.ObjectName(ArtifactsResourceName)))
+				delete(expectedUIRewrites, match)
+			}
+			Expect(expectedUIRewrites).To(BeEmpty())
+
+			artifactRule := artifactRoute.Spec.Rules[9]
 			Expect(artifactRule.Matches).To(HaveLen(1))
 			Expect(artifactRule.Matches[0].Path).NotTo(BeNil())
 			Expect(artifactRule.Matches[0].Path.Value).NotTo(BeNil())
@@ -532,14 +554,18 @@ var _ = Describe("MLflow Controller", func() {
 
 			artifactRoute := &gatewayv1.HTTPRoute{}
 			Expect(k8sClient.Get(ctx, artifactKey, artifactRoute)).To(Succeed())
-			Expect(artifactRoute.Spec.Rules).To(HaveLen(2))
+			Expect(artifactRoute.Spec.Rules).To(HaveLen(10))
 			Expect(*artifactRoute.Spec.Rules[0].Matches[0].Path.Value).To(Equal(
 				"/mlflow-custom/api/2.0/mlflow-artifacts/artifacts",
 			))
 			Expect(*artifactRoute.Spec.Rules[0].Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(
 				"/mlflow-artifacts-custom/api/2.0/mlflow-artifacts/artifacts",
 			))
-			Expect(*artifactRoute.Spec.Rules[1].Matches[0].Path.Value).To(Equal("/mlflow-artifacts-custom"))
+			Expect(*artifactRoute.Spec.Rules[1].Matches[0].Path.Value).To(Equal("/mlflow-custom/get-artifact"))
+			Expect(*artifactRoute.Spec.Rules[1].Filters[0].URLRewrite.Path.ReplacePrefixMatch).To(Equal(
+				"/mlflow-artifacts-custom/get-artifact",
+			))
+			Expect(*artifactRoute.Spec.Rules[9].Matches[0].Path.Value).To(Equal("/mlflow-artifacts-custom"))
 			Expect(artifactRoute.Spec.Rules[0].BackendRefs[0].Name).To(Equal(
 				gatewayv1.ObjectName("mlflow-artifacts-custom"),
 			))

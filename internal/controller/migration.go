@@ -218,11 +218,16 @@ func renderedDeployment(objects []*unstructured.Unstructured, name, namespace st
 	return nil, fmt.Errorf("rendered Deployment %s/%s not found", namespace, name)
 }
 
-func scaledDownObjects(objects []*unstructured.Unstructured, deploymentName string) []*unstructured.Unstructured {
+func scaledDownObjects(objects []*unstructured.Unstructured, deploymentNames ...string) []*unstructured.Unstructured {
+	names := make(map[string]struct{}, len(deploymentNames))
+	for _, name := range deploymentNames {
+		names[name] = struct{}{}
+	}
 	scaled := make([]*unstructured.Unstructured, 0, len(objects))
 	for _, obj := range objects {
 		copyObj := obj.DeepCopy()
-		if copyObj.GetKind() == "Deployment" && copyObj.GetName() == deploymentName {
+		_, shouldScale := names[copyObj.GetName()]
+		if copyObj.GetKind() == "Deployment" && shouldScale {
 			if err := unstructured.SetNestedField(copyObj.Object, int64(0), "spec", "replicas"); err != nil {
 				logf.Log.Error(err, "Failed to set Deployment replicas to zero in rendered object", "name", copyObj.GetName(), "namespace", copyObj.GetNamespace())
 			}
@@ -230,6 +235,46 @@ func scaledDownObjects(objects []*unstructured.Unstructured, deploymentName stri
 		scaled = append(scaled, copyObj)
 	}
 	return scaled
+}
+
+func (r *MLflowReconciler) scaleDownOwnedArtifactDeployment(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	name, namespace string,
+) error {
+	deployment := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, deployment); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !metav1.IsControlledBy(deployment, mlflow) || (deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == 0) {
+		return nil
+	}
+
+	before := deployment.DeepCopy()
+	zero := int32(0)
+	deployment.Spec.Replicas = &zero
+	return r.Patch(ctx, deployment, client.MergeFrom(before))
+}
+
+func (r *MLflowReconciler) applyMigrationScaleDown(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	objects []*unstructured.Unstructured,
+	namespace, trackingDeploymentName, artifactDeploymentName string,
+) error {
+	if err := r.applyRenderedObjects(
+		ctx,
+		mlflow,
+		scaledDownObjects(objects, trackingDeploymentName, artifactDeploymentName),
+	); err != nil {
+		return err
+	}
+	// A split server being disabled is absent from the new render but must stop using metadata
+	// before migration. Cleanup is deferred by the main reconciler until migration finishes.
+	return r.scaleDownOwnedArtifactDeployment(ctx, mlflow, artifactDeploymentName, namespace)
 }
 
 func isJobSuccessful(job *batchv1.Job) bool {
@@ -607,6 +652,32 @@ func deploymentHasActiveReplicas(deployment *appsv1.Deployment) bool {
 	return deployment.Status.Replicas > 0
 }
 
+func (r *MLflowReconciler) activeMigrationDeployments(
+	ctx context.Context,
+	mlflow *mlflowv1.MLflow,
+	namespace string,
+	deploymentNames ...string,
+) ([]string, error) {
+	activeDeployments := make([]string, 0, len(deploymentNames))
+	for _, name := range deploymentNames {
+		deployment := &appsv1.Deployment{}
+		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, deployment)
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if name != ResourceName+getResourceSuffix(mlflow.Name) && !metav1.IsControlledBy(deployment, mlflow) {
+			continue
+		}
+		if deploymentHasActiveReplicas(deployment) {
+			activeDeployments = append(activeDeployments, fmt.Sprintf("%s=%d", name, deployment.Status.Replicas))
+		}
+	}
+	return activeDeployments, nil
+}
+
 func findContainer(containers []corev1.Container, name string) *corev1.Container {
 	for i := range containers {
 		if containers[i].Name == name {
@@ -696,6 +767,7 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 	)
 
 	deploymentName := ResourceName + getResourceSuffix(mlflow.Name)
+	artifactDeploymentName := ArtifactsResourceName + getResourceSuffix(mlflow.Name)
 	deployment, err := renderedDeployment(objects, deploymentName, namespace)
 	if err != nil {
 		return ctrl.Result{}, true, err
@@ -711,7 +783,7 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 	}
 
 	if jobExists && isJobFailed(existingJob) && !hasForceMigrateAnnotation(mlflow) {
-		if err := r.applyRenderedObjects(ctx, mlflow, scaledDownObjects(objects, deploymentName)); err != nil {
+		if err := r.applyMigrationScaleDown(ctx, mlflow, objects, namespace, deploymentName, artifactDeploymentName); err != nil {
 			return ctrl.Result{}, true, err
 		}
 
@@ -825,7 +897,7 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 	// Any path that reaches here either has no finished migration Job yet or is
 	// intentionally holding the Deployment at zero replicas while migration is
 	// pending or failed.
-	if err := r.applyRenderedObjects(ctx, mlflow, scaledDownObjects(objects, deploymentName)); err != nil {
+	if err := r.applyMigrationScaleDown(ctx, mlflow, objects, namespace, deploymentName, artifactDeploymentName); err != nil {
 		return ctrl.Result{}, true, err
 	}
 
@@ -841,20 +913,17 @@ func (r *MLflowReconciler) handleMigration(ctx context.Context, mlflow *mlflowv1
 		return ctrl.Result{}, true, nil
 	}
 
-	currentDeployment := &appsv1.Deployment{}
-	deploymentErr := r.Get(ctx, types.NamespacedName{Name: deploymentName, Namespace: namespace}, currentDeployment)
-	deploymentNotFound := errors.IsNotFound(deploymentErr)
-	deploymentExists := deploymentErr == nil
-	if deploymentErr != nil && !deploymentNotFound {
-		return ctrl.Result{}, true, deploymentErr
+	activeDeployments, err := r.activeMigrationDeployments(ctx, mlflow, namespace, deploymentName, artifactDeploymentName)
+	if err != nil {
+		return ctrl.Result{}, true, err
 	}
-	if deploymentExists && deploymentHasActiveReplicas(currentDeployment) {
+	if len(activeDeployments) > 0 {
 		if err := r.recordMigrationProgress(
 			ctx,
 			mlflow,
 			migrationProgressReason(trigger, migrationReasonScalingDown),
 			trigger.message(
-				fmt.Sprintf("Waiting for MLflow pods to quiesce before migration: %d replicas remain", currentDeployment.Status.Replicas),
+				fmt.Sprintf("Waiting for MLflow pods to quiesce before migration: active replicas %s", strings.Join(activeDeployments, ", ")),
 			),
 		); err != nil {
 			return ctrl.Result{}, true, err

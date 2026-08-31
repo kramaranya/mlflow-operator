@@ -749,3 +749,52 @@ func TestDeploymentHasActiveReplicas(t *testing.T) {
 		})
 	}
 }
+
+func TestActiveMigrationDeploymentsIncludesOwnedTrackingAndArtifactServers(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add appsv1 to scheme: %v", err)
+	}
+	if err := mlflowv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add MLflow API to scheme: %v", err)
+	}
+	mlflow := &mlflowv1.MLflow{ObjectMeta: metav1.ObjectMeta{Name: ResourceName, UID: "mlflow-uid"}}
+	owner := *metav1.NewControllerRef(mlflow, mlflowv1.GroupVersion.WithKind("MLflow"))
+	tracking := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: ResourceName, Namespace: "test-ns"},
+		Status:     appsv1.DeploymentStatus{Replicas: 1},
+	}
+	artifacts := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ArtifactsResourceName,
+			Namespace:       "test-ns",
+			OwnerReferences: []metav1.OwnerReference{owner},
+		},
+		Status: appsv1.DeploymentStatus{Replicas: 2},
+	}
+	reconciler := &MLflowReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(tracking, artifacts).Build()}
+
+	active, err := reconciler.activeMigrationDeployments(
+		context.Background(), mlflow, "test-ns", ResourceName, ArtifactsResourceName,
+	)
+	if err != nil {
+		t.Fatalf("activeMigrationDeployments() error = %v", err)
+	}
+	if len(active) != 2 || active[0] != "mlflow=1" || active[1] != "mlflow-artifacts=2" {
+		t.Fatalf("activeMigrationDeployments() = %v, want [mlflow=1 mlflow-artifacts=2]", active)
+	}
+
+	artifacts.OwnerReferences = nil
+	reconciler.Client = fake.NewClientBuilder().WithScheme(scheme).WithObjects(tracking, artifacts).Build()
+	active, err = reconciler.activeMigrationDeployments(
+		context.Background(), mlflow, "test-ns", ResourceName, ArtifactsResourceName,
+	)
+	if err != nil {
+		t.Fatalf("activeMigrationDeployments() with unowned artifact server error = %v", err)
+	}
+	if len(active) != 1 || active[0] != "mlflow=1" {
+		t.Fatalf("activeMigrationDeployments() with unowned artifact server = %v, want [mlflow=1]", active)
+	}
+}

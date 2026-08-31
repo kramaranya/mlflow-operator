@@ -1,9 +1,16 @@
 import logging
-import mlflow
+import os
+import time
 from typing import ClassVar
+
+import mlflow
+import pytest
+import requests
+from mlflow.utils.workspace_utils import WORKSPACE_HEADER_NAME
 
 from .shared import UserInfo, TestData, TestStep
 from .constants.config import Config
+from .http_utils import get_mlflow_base_uri, get_requests_verify_value
 from .actions import (
     action_start_run,
     action_end_run,
@@ -34,11 +41,8 @@ from .validations import (
     validate_custom_artifact_location,
     validate_no_error,
 )
-from .validations.experiment_validations import validate_experiment_created
-
-import pytest
-
 from mlflow_tests.enums import ResourceType, KubeVerb
+from .validations.experiment_validations import validate_experiment_created
 from .base import TestBase
 
 logger = logging.getLogger(__name__)
@@ -257,3 +261,92 @@ class TestMLflowArtifacts(TestBase):
         self._execute_test_steps(test_data)
 
         logger.info(f"Test PASSED: {test_data.test_name}")
+
+
+@pytest.mark.artifacts_server
+@pytest.mark.skipif(
+    not Config.ARTIFACTS_SERVER,
+    reason="requires an ARTIFACTS_SERVER=true Gateway integration deployment",
+)
+class TestMLflowArtifactsServer(TestBase):
+    def test_ui_artifact_handlers_are_served_by_artifact_deployment(
+        self, create_user_with_permissions
+    ) -> None:
+        workspace = Config.WORKSPACES[0]
+        user = create_user_with_permissions(
+            workspace=workspace,
+            verbs=[KubeVerb.GET, KubeVerb.UPDATE, KubeVerb.LIST],
+            resource_types=[ResourceType.EXPERIMENTS],
+        )
+        self.test_context.active_user = user
+        self.test_context.user_client = user.client
+        self.test_context.active_workspace = workspace
+        mlflow.set_workspace(workspace)
+        self._set_active_experiment_from_map(workspace)
+
+        action_start_run(self.test_context)
+        action_create_temp_artifact(self.test_context)
+        try:
+            action_log_artifact(self.test_context)
+        finally:
+            action_end_run(self.test_context)
+
+        run_id = self.test_context.current_run_id
+        artifact_name = os.path.basename(self.test_context.temp_artifact_path)
+        headers = {
+            "Authorization": f"Bearer {user.upass}",
+            WORKSPACE_HEADER_NAME: workspace,
+        }
+        request_args = {
+            "headers": headers,
+            "timeout": Config.REQUEST_TIMEOUT,
+            "verify": get_requests_verify_value(),
+        }
+        base_uri = get_mlflow_base_uri()
+
+        list_response = requests.get(
+            f"{base_uri}/ajax-api/2.0/mlflow/artifacts/list",
+            params={"run_id": run_id},
+            **request_args,
+        )
+        list_response.raise_for_status()
+        assert any(
+            file_info.get("path") == artifact_name
+            for file_info in list_response.json()["files"]
+        )
+
+        download_response = requests.get(
+            f"{base_uri}/get-artifact",
+            params={"run_uuid": run_id, "path": artifact_name},
+            **request_args,
+        )
+        download_response.raise_for_status()
+        assert download_response.text == self.test_context.temp_artifact_content
+
+        expected_paths = {
+            "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",
+            "/mlflow-artifacts/get-artifact",
+        }
+        deadline = time.monotonic() + 30
+        observed_paths = set()
+        while time.monotonic() < deadline and observed_paths != expected_paths:
+            pods = self.k8_manager.core_v1_api.list_namespaced_pod(
+                Config.MLFLOW_NAMESPACE,
+                label_selector="app=mlflow-artifacts",
+            ).items
+            for pod in pods:
+                logs = self.k8_manager.core_v1_api.read_namespaced_pod_log(
+                    pod.metadata.name,
+                    Config.MLFLOW_NAMESPACE,
+                    container="mlflow-artifacts",
+                    since_seconds=60,
+                )
+                for line in logs.splitlines():
+                    observed_paths.update(path for path in expected_paths if path in line)
+            if observed_paths != expected_paths:
+                time.sleep(1)
+
+        assert observed_paths == expected_paths, (
+            "artifact Deployment access logs did not record all Gateway-rewritten UI requests; "
+            f"observed {sorted(observed_paths)}"
+        )

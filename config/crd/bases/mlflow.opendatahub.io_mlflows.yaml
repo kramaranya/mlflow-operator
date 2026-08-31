@@ -992,21 +992,22 @@ spec:
                 type: string
               artifactsServer:
                 description: |-
-                  ArtifactsServer configures a dedicated MLflow artifacts-only deployment. When enabled,
+                  ArtifactsServer configures a dedicated metadata-aware MLflow artifact-serving deployment. When enabled,
                   the tracking server advertises the dedicated server's HTTPRoute as its artifact root and
-                  does not serve artifacts itself. The artifact server inherits the image, environment,
-                  workspace, security, scheduling, and storage settings from this MLflow spec.
+                  does not serve artifacts itself. The artifact server connects to the same metadata stores,
+                  runs with server-side job execution disabled, and inherits the image, environment, workspace,
+                  security, scheduling, and storage settings from this MLflow spec.
                 properties:
                   enabled:
                     default: false
                     description: |-
-                      Enabled controls whether the dedicated artifacts-only Deployment, Service, and HTTPRoute
+                      Enabled controls whether the dedicated artifact-serving Deployment, Service, and HTTPRoute
                       are created.
                     type: boolean
                   replicas:
                     default: 1
-                    description: Replicas is the number of artifacts-only server pods
-                      to run.
+                    description: Replicas is the number of artifact-serving server
+                      pods to run.
                     format: int32
                     minimum: 1
                     type: integer
@@ -1063,7 +1064,7 @@ spec:
                     x-kubernetes-list-type: map
                   resources:
                     description: |-
-                      Resources specifies the compute resources for the artifacts-only server container.
+                      Resources specifies the compute resources for the artifact-serving server container.
                       When omitted, the main MLflow server requests and limits are used, but claims are not inherited.
                     properties:
                       claims:
@@ -1125,7 +1126,7 @@ spec:
                   workers:
                     default: 1
                     description: Workers is the number of uvicorn worker processes
-                      in each artifacts-only server pod.
+                      in each artifact-serving server pod.
                     format: int32
                     minimum: 1
                     type: integer

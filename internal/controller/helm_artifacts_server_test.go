@@ -25,8 +25,10 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: ResourceName},
 		Spec: mlflowv1.MLflowSpec{
-			BackendStoreURI:      ptr("postgresql://db.example.com/mlflow"),
-			ArtifactsDestination: ptr("s3://bucket/artifacts"),
+			BackendStoreURI:            ptr("postgresql://db.example.com/mlflow"),
+			RegistryStoreURI:           ptr("postgresql://registry.example.com/mlflow"),
+			ReadReplicaBackendStoreURI: ptr("postgresql://reader.example.com/mlflow"),
+			ArtifactsDestination:       ptr("s3://bucket/artifacts"),
 			// Legacy objects may predate the CEL rule; the generated route must still win.
 			DefaultArtifactRoot: ptr("s3://bucket/legacy-root"),
 			CABundleConfigMap:   &mlflowv1.CABundleConfigMapSpec{Name: "custom-ca"},
@@ -39,15 +41,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 			},
 			Env: []corev1.EnvVar{
 				{Name: "AWS_DEFAULT_REGION", Value: "us-east-1"},
-				{Name: "MLFLOW_BACKEND_STORE_URI", Value: "postgresql://override.example.com/mlflow"},
-				{Name: "MLFLOW_REGISTRY_STORE_URI", Value: "postgresql://registry.example.com/mlflow"},
-				{
-					Name: "MLFLOW_READ_REPLICA_BACKEND_STORE_URI",
-					ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "metadata-credentials"},
-						Key:                  "read-replica-uri",
-					}},
-				},
+				{Name: "MLFLOW_SERVER_ENABLE_JOB_EXECUTION", Value: "true"},
 			},
 			EnvFrom: []corev1.EnvFromSource{{
 				SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-and-metadata-credentials"}},
@@ -99,7 +93,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	}
 	container := artifacts.Spec.Template.Spec.Containers[0]
 	for _, arg := range []string{
-		"--artifacts-only",
+		"--serve-artifacts",
 		"--artifacts-destination=s3://bucket/artifacts",
 		"--app-name=kubernetes-auth",
 		"--enable-workspaces",
@@ -111,8 +105,11 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 			t.Errorf("artifact args missing %q: %v", arg, container.Args)
 		}
 	}
-	if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet == nil || container.ReadinessProbe.HTTPGet.Path != "/mlflow-artifacts/health" {
-		t.Errorf("artifact readiness probe = %#v, want /mlflow-artifacts/health", container.ReadinessProbe)
+	if slices.Contains(container.Args, "--artifacts-only") {
+		t.Errorf("artifact args unexpectedly contain --artifacts-only: %v", container.Args)
+	}
+	if container.ReadinessProbe == nil || container.ReadinessProbe.HTTPGet == nil || container.ReadinessProbe.HTTPGet.Path != "/mlflow-artifacts/api/3.0/mlflow/server-info" {
+		t.Errorf("artifact readiness probe = %#v, want /mlflow-artifacts/api/3.0/mlflow/server-info", container.ReadinessProbe)
 	}
 	if container.Resources.Requests.Cpu().String() != "500m" {
 		t.Errorf("artifact CPU request = %s, want 500m", container.Resources.Requests.Cpu().String())
@@ -146,20 +143,24 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{
-		"MLFLOW_BACKEND_STORE_URI",
-		"MLFLOW_REGISTRY_STORE_URI",
-		"MLFLOW_READ_REPLICA_BACKEND_STORE_URI",
+	for name, value := range map[string]string{
+		"MLFLOW_BACKEND_STORE_URI":              "postgresql://db.example.com/mlflow",
+		"MLFLOW_REGISTRY_STORE_URI":             "postgresql://registry.example.com/mlflow",
+		"MLFLOW_READ_REPLICA_BACKEND_STORE_URI": "postgresql://reader.example.com/mlflow",
+		"MLFLOW_SERVER_ENABLE_JOB_EXECUTION":    "false",
 	} {
-		matches := make([]corev1.EnvVar, 0, 1)
-		for _, variable := range container.Env {
-			if variable.Name == name {
-				matches = append(matches, variable)
-			}
+		if !hasEnvValue(container.Env, name, value) {
+			t.Errorf("artifact metadata/job env missing %s=%q: %#v", name, value, container.Env)
 		}
-		if len(matches) != 1 || matches[0].Value != "" || matches[0].ValueFrom != nil {
-			t.Errorf("artifact %s env = %#v, want one explicit empty value", name, matches)
+	}
+	jobExecutionEnvCount := 0
+	for _, variable := range container.Env {
+		if variable.Name == "MLFLOW_SERVER_ENABLE_JOB_EXECUTION" {
+			jobExecutionEnvCount++
 		}
+	}
+	if jobExecutionEnvCount != 1 {
+		t.Errorf("artifact job execution env count = %d, want exactly 1", jobExecutionEnvCount)
 	}
 
 	artifactService := findObject(objects, "Service", ArtifactsResourceName)
@@ -423,7 +424,7 @@ func TestRenderChartArtifactsServerStorageMounts(t *testing.T) {
 	}
 }
 
-func TestRenderChartArtifactsServerSecretBackedMetadataStorageIsolation(t *testing.T) {
+func TestRenderChartArtifactsServerUsesSecretBackedMetadata(t *testing.T) {
 	renderer := NewHelmRenderer("../../charts/mlflow")
 	replicas := int32(3)
 	mlflow := &mlflowv1.MLflow{
@@ -463,6 +464,19 @@ func TestRenderChartArtifactsServerSecretBackedMetadataStorageIsolation(t *testi
 	}
 	if !deploymentMountsStorage(artifacts) {
 		t.Fatal("artifact Deployment did not mount file-backed artifact storage")
+	}
+	artifactEnv := map[string]corev1.EnvVar{}
+	for _, variable := range artifacts.Spec.Template.Spec.Containers[0].Env {
+		artifactEnv[variable.Name] = variable
+	}
+	for _, name := range []string{"MLFLOW_BACKEND_STORE_URI", "MLFLOW_REGISTRY_STORE_URI"} {
+		variable, ok := artifactEnv[name]
+		if !ok || variable.ValueFrom == nil || variable.ValueFrom.SecretKeyRef == nil {
+			t.Fatalf("artifact %s = %#v, want SecretKeyRef", name, variable)
+		}
+		if variable.ValueFrom.SecretKeyRef.Name != "remote-db-credentials" || variable.ValueFrom.SecretKeyRef.Key != "backend-uri" {
+			t.Errorf("artifact %s SecretKeyRef = %#v, want remote-db-credentials/backend-uri", name, variable.ValueFrom.SecretKeyRef)
+		}
 	}
 }
 

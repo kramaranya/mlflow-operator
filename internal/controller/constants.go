@@ -21,7 +21,7 @@ const artifactsServerHTTPRouteRequiredMessage = "artifactsServer requires the HT
 const (
 	// ResourceName is the base name used for MLflow resources (deployments, services, etc.)
 	ResourceName = "mlflow"
-	// ArtifactsResourceName is the base name used for dedicated artifacts-only resources.
+	// ArtifactsResourceName is the base name used for dedicated artifact-serving resources.
 	ArtifactsResourceName = "mlflow-artifacts"
 	// ArtifactsAPIPath is the MLflow proxied artifact API path.
 	ArtifactsAPIPath = "/api/2.0/mlflow-artifacts/artifacts"
@@ -39,7 +39,7 @@ const (
 	TraceArchivalServiceAccountName = "mlflow-trace-archival-sa"
 	// TLSSecretName is the default name for the TLS secret used by the MLflow server
 	TLSSecretName = "mlflow-tls"
-	// ArtifactsTLSSecretName is the TLS secret used by the dedicated artifacts-only server.
+	// ArtifactsTLSSecretName is the TLS secret used by the dedicated artifact server.
 	ArtifactsTLSSecretName = "mlflow-artifacts-tls"
 	// StaticPrefix is the URL prefix for MLflow when deployed via the operator
 	StaticPrefix = "/mlflow"

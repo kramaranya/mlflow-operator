@@ -399,8 +399,8 @@ See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example
 
 ### Dedicated Artifact Server
 
-Artifact traffic can be isolated from tracking traffic by enabling a dedicated MLflow
-artifacts-only server:
+Artifact traffic can be isolated from general tracking traffic by enabling a dedicated,
+metadata-aware MLflow artifact server:
 
 ```yaml
 spec:
@@ -432,7 +432,8 @@ replica may use `ReadWriteOnce`; multiple artifact replicas require `ReadWriteMa
 storage access mode. The operator creates:
 
 - The normal `mlflow` tracking Deployment, Service, and `/mlflow` HTTPRoute
-- An `mlflow-artifacts` Deployment running with `--artifacts-only`
+- An `mlflow-artifacts` Deployment running with `--serve-artifacts`, the same metadata-store
+  configuration as tracking, and `MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`
 - An `mlflow-artifacts` Service and `/mlflow-artifacts` HTTPRoute
 - A separate `mlflow-artifacts-tls` serving-certificate request on OpenShift; on other
   Kubernetes distributions, provide that Secret before enabling the feature
@@ -446,17 +447,22 @@ Experiments created before split serving may retain `mlflow-artifacts:/` artifac
 artifact HTTPRoute also matches their tracking-relative `/mlflow/api/2.0/mlflow-artifacts/artifacts`
 requests and rewrites them to the dedicated route, so enabling split serving does not require
 rewriting existing experiment or run metadata. Per-resource suffixes are preserved on both paths.
+The artifact HTTPRoute also rewrites the narrow set of tracking-relative UI handlers that require
+metadata to resolve artifact locations: run and model-version downloads, artifact listing and
+upload, trace artifacts, and logged-model artifact operations. All other `/mlflow` traffic remains
+on the tracking Service except for the logged-model route family. Gateway API cannot match a
+wildcard model ID in the middle of a path, so the logged-model rule uses the narrowest portable
+prefix ending at `/logged-models/`; consequently, non-artifact logged-model requests under that
+prefix also reach the metadata-aware artifact Deployment.
 
 `spec.temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` for both the
-tracking and artifacts-only pods; increase it for larger or more concurrent proxied transfers.
+tracking and artifact-serving pods; increase it for larger or more concurrent proxied transfers.
 
 Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
 They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
-security contexts, and scheduling configuration. Metadata-store environment variables are cleared
-from the artifacts-only container, including when they are present in a shared `envFrom` source.
-The image must include the workspace-aware artifacts-only support from
-[`mlflow/mlflow#24452`](https://github.com/mlflow/mlflow/pull/24452); the ODH runtime includes this
-support, while stock upstream MLflow `v3.14.0` does not.
+security contexts, scheduling configuration, and primary/registry/read-replica metadata URIs.
+This metadata-aware deployment is a short-term compatibility topology for UI artifact handlers;
+server-side job execution is disabled in both deployments to avoid duplicate background work.
 The shared CA configuration includes PostgreSQL and MySQL client settings as well as HTTP and S3,
 keeping standalone chart deployments with SQL-backed artifact workspace stores TLS-compatible.
 `artifactsServer.replicas`,
@@ -464,17 +470,38 @@ keeping standalone chart deployments with SQL-backed artifact workspace stores T
 independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
 `artifactsServer.enabled` cannot both be enabled.
 
-The artifacts-only server validates `X-MLFLOW-WORKSPACE` and scopes proxied paths under the
-request workspace. A namespace-specific `MLflowConfig.spec.artifactRootSecret` remains a direct
-storage override: experiments in that workspace receive the configured object-storage URI and
-bypass the shared artifact proxy. The artifacts-only server has one global
+The live compatibility test requires an OpenShift cluster with the configured Gateway and verifies
+that authenticated, workspace-scoped `/mlflow/get-artifact` and
+`/mlflow/ajax-api/2.0/mlflow/artifacts/list` requests are served by the artifact Deployment:
+
+```bash
+ARTIFACTS_SERVER=true \
+ARTIFACT_BACKENDS=s3 \
+BACKEND_STORE=postgres \
+REGISTRY_STORE=postgres \
+INFRASTRUCTURE_PLATFORM=openshift \
+mlflow-tests/images/test-run.sh -m artifacts_server
+```
+
+The default Kind integration jobs do not run this case because installing Gateway API CRDs without
+a Gateway controller cannot validate route precedence or forwarded authentication.
+
+The artifact server validates `X-MLFLOW-WORKSPACE` and resolves metadata in the request workspace.
+A namespace-specific `MLflowConfig.spec.artifactRootSecret` remains a direct storage override:
+experiments in that workspace receive the configured object-storage URI and bypass the shared
+artifact proxy. The artifact server has one global
 `artifactsDestination` and does not dynamically select per-namespace storage credentials.
 
-Disabling `artifactsServer` removes its Deployment, Service, and HTTPRoute. See
+Operator-managed migrations scale both metadata-connected Deployments to zero and wait until all
+their replicas disappear before creating the migration Job. If split serving is disabled in the
+same desired generation, cleanup of the old artifact Deployment is deferred until it has been
+quiesced and the migration plus tracking rollout complete.
+
+Disabling `artifactsServer` otherwise removes its Deployment, Service, and HTTPRoute. See
 `config/samples/mlflow_v1_mlflow_artifacts_server.yaml` for a complete remote-storage example.
 
 The garbage-collection CronJob resolves proxy-backed artifact locations through the internal
-tracking Service normally and through the internal artifacts-only Service in split mode. This
+tracking Service normally and through the internal artifact Service in split mode. This
 keeps historical `mlflow-artifacts:/` locations deletable after enabling the dedicated server
 without depending on the external Gateway. The CronJob mounts persistent storage only when its
 backend metadata URI may be local, so PostgreSQL with proxied remote artifacts does not attach an
@@ -577,7 +604,7 @@ When CA bundles are present (platform or custom), PostgreSQL connections use `PG
 See the [config/samples](./config/samples/) directory for complete examples:
 - `mlflow_v1_mlflow.yaml` - OpenShift deployment with local storage, service-ca TLS, and a commented DRA example
 - `mlflow_v1_mlflow_remote_storage.yaml` - PostgreSQL primary/read-replica routing + S3 storage with horizontal scaling and a temporary storage override for proxied artifact serving
-- `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and workspace-aware artifacts-only servers using PostgreSQL and S3
+- `mlflow_v1_mlflow_artifacts_server.yaml` - Split tracking and metadata-aware artifact-serving servers using PostgreSQL and S3
 - `mlflow_v1_mlflowconfig.yaml` - Namespace-scoped artifact storage override using the upstream `MLflowConfig` CRD
 
 ## Development

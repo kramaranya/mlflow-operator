@@ -1,7 +1,6 @@
 {{- if .Values.artifactsServer.enabled }}
 {{- $healthPrefix := .Values.artifactsServer.staticPrefix | trimSuffix "/" -}}
 {{- $artifactsMountStorage := eq (include "mlflow.artifactsMountsStorage" .) "true" -}}
-{{- $metadataStoreEnvNames := list "MLFLOW_BACKEND_STORE_URI" "MLFLOW_REGISTRY_STORE_URI" "MLFLOW_READ_REPLICA_BACKEND_STORE_URI" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -90,7 +89,7 @@ spec:
             - mlflow
           args:
             - server
-            - --artifacts-only
+            - --serve-artifacts
             - --artifacts-destination={{ .Values.artifactsServer.artifactsDestination }}
             - --app-name=kubernetes-auth
             - --enable-workspaces
@@ -109,8 +108,31 @@ spec:
           env:
             - name: MLFLOW_DISABLE_TELEMETRY
               value: "true"
-            - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
-              value: "false"
+            - name: MLFLOW_BACKEND_STORE_URI
+              {{- if .Values.mlflow.backendStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.backendStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.backendStoreUri | quote }}
+              {{- end }}
+            {{- if or .Values.mlflow.readReplicaBackendStoreUri .Values.mlflow.readReplicaBackendStoreUriFrom }}
+            - name: MLFLOW_READ_REPLICA_BACKEND_STORE_URI
+              {{- if .Values.mlflow.readReplicaBackendStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.readReplicaBackendStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.readReplicaBackendStoreUri | quote }}
+              {{- end }}
+            {{- end }}
+            {{- if or .Values.mlflow.registryStoreUri .Values.mlflow.registryStoreUriFrom }}
+            - name: MLFLOW_REGISTRY_STORE_URI
+              {{- if .Values.mlflow.registryStoreUriFrom }}
+              valueFrom:
+                {{- toYaml .Values.mlflow.registryStoreUriFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .Values.mlflow.registryStoreUri | quote }}
+              {{- end }}
+            {{- end }}
             - name: MLFLOW_K8S_AUTH_AUTHORIZATION_MODE
               value: "self_subject_access_review"
             {{- if .Values.artifactsServer.workspaceLabelSelector }}
@@ -118,7 +140,7 @@ spec:
               value: {{ .Values.artifactsServer.workspaceLabelSelector | quote }}
             {{- end }}
             {{- range .Values.env }}
-            {{- if not (has .name $metadataStoreEnvNames) }}
+            {{- if ne .name "MLFLOW_SERVER_ENABLE_JOB_EXECUTION" }}
             - name: {{ .name }}
               {{- if .valueFrom }}
               valueFrom:
@@ -128,11 +150,9 @@ spec:
               {{- end }}
             {{- end }}
             {{- end }}
-            # Explicit env entries override incompatible metadata-store keys imported by envFrom.
-            {{- range $metadataStoreEnvNames }}
-            - name: {{ . }}
-              value: ""
-            {{- end }}
+            # The second metadata-aware server must never run duplicate background jobs.
+            - name: MLFLOW_SERVER_ENABLE_JOB_EXECUTION
+              value: "false"
             - name: MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE
               value: "false"
             {{- include "mlflow.caBundleEnv" . | nindent 12 }}
@@ -170,7 +190,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: {{ printf "%s/health" $healthPrefix }}
+              path: {{ printf "%s/api/3.0/mlflow/server-info" $healthPrefix }}
               port: https
               scheme: HTTPS
             initialDelaySeconds: 5

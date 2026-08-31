@@ -218,10 +218,11 @@ type MLflowSpec struct {
 	// +optional
 	ServeArtifacts *bool `json:"serveArtifacts,omitempty"`
 
-	// ArtifactsServer configures a dedicated MLflow artifacts-only deployment. When enabled,
+	// ArtifactsServer configures a dedicated metadata-aware MLflow artifact-serving deployment. When enabled,
 	// the tracking server advertises the dedicated server's HTTPRoute as its artifact root and
-	// does not serve artifacts itself. The artifact server inherits the image, environment,
-	// workspace, security, scheduling, and storage settings from this MLflow spec.
+	// does not serve artifacts itself. The artifact server connects to the same metadata stores,
+	// runs with server-side job execution disabled, and inherits the image, environment, workspace,
+	// security, scheduling, and storage settings from this MLflow spec.
 	// +optional
 	ArtifactsServer *ArtifactsServerSpec `json:"artifactsServer,omitempty"`
 
@@ -348,28 +349,28 @@ type MLflowSpec struct {
 	TraceArchival *TraceArchivalSpec `json:"traceArchival,omitempty"`
 }
 
-// ArtifactsServerSpec configures the dedicated artifacts-only MLflow deployment.
+// ArtifactsServerSpec configures the dedicated metadata-aware artifact-serving MLflow deployment.
 // +kubebuilder:validation:XValidation:rule="!has(self.resourceClaims) || self.resourceClaims.all(c, ((has(c.resourceClaimName) && size(c.resourceClaimName) > 0) != (has(c.resourceClaimTemplateName) && size(c.resourceClaimTemplateName) > 0)))",message="each artifactsServer.resourceClaims entry must set exactly one non-empty value: resourceClaimName or resourceClaimTemplateName"
 type ArtifactsServerSpec struct {
-	// Enabled controls whether the dedicated artifacts-only Deployment, Service, and HTTPRoute
+	// Enabled controls whether the dedicated artifact-serving Deployment, Service, and HTTPRoute
 	// are created.
 	// +kubebuilder:default=false
 	// +optional
 	Enabled bool `json:"enabled,omitempty"`
 
-	// Replicas is the number of artifacts-only server pods to run.
+	// Replicas is the number of artifact-serving server pods to run.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
-	// Workers is the number of uvicorn worker processes in each artifacts-only server pod.
+	// Workers is the number of uvicorn worker processes in each artifact-serving server pod.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Workers *int32 `json:"workers,omitempty"`
 
-	// Resources specifies the compute resources for the artifacts-only server container.
+	// Resources specifies the compute resources for the artifact-serving server container.
 	// When omitted, the main MLflow server requests and limits are used, but claims are not inherited.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`

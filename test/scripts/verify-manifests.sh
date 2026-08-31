@@ -107,7 +107,7 @@ for chart_dir in charts/*/; do
             echo -e "  ${GREEN}✓ Malformed read-replica secret ref rejected${NC}"
         fi
 
-        echo "  Rendering dedicated artifacts-only server..."
+        echo "  Rendering dedicated metadata-aware artifact server..."
         ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=s3://bucket/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts"
         if helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" > /dev/null 2>&1; then
             echo -e "  ${GREEN}✓ Dedicated artifact server renders successfully${NC}"

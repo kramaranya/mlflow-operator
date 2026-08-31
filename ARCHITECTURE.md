@@ -36,7 +36,7 @@ flowchart LR
   mlflowCr --> chart["Internal Helm chart"]
 
   chart --> deploy["Tracking Deployment and Service"]
-  chart -. "when artifactsServer is enabled" .-> artifactDeploy["Artifacts-only Deployment and Service"]
+  chart -. "when artifactsServer is enabled" .-> artifactDeploy["Metadata-aware artifact Deployment and Service"]
   chart --> access["ServiceAccount and RBAC"]
   chart --> storage["PVC or remote storage"]
   chart --> policy["NetworkPolicy/ServiceMonitor"]
@@ -105,8 +105,14 @@ the second Service without changing the tracking URI. A more-specific compatibil
 the legacy `/mlflow/api/2.0/mlflow-artifacts/artifacts` path to the same Service and rewrites it to
 the dedicated prefix. Existing `mlflow-artifacts:/` experiment and run locations therefore remain
 usable after split serving is enabled without giving the tracking Deployment artifact storage.
+The artifact route also rewrites tracking-relative UI artifact handlers that need metadata lookups.
+Run/model-version downloads, artifact list/upload, trace-artifact, and logged-model artifact requests
+use the artifact Service; the general `/mlflow` route continues to select tracking. Because Gateway
+API cannot portably match the model ID in the middle of logged-model artifact paths, the
+`/logged-models/` compatibility prefix also sends non-artifact logged-model requests to the
+metadata-aware artifact Deployment.
 The garbage-collection CronJob bypasses the external Gateway but follows the same compatibility
-model by resolving those locations against the internal artifacts-only Service and static prefix.
+model by resolving those locations against the internal artifact Service and static prefix.
 The controller verifies that the `HTTPRoute` API is available before cleanup, migration, chart
 rendering, or operand application, preventing a missing routing capability from causing a partial
 split-server rollout.
@@ -118,14 +124,19 @@ flowchart LR
   trackingRoute --> trackingService[mlflow Service]
   trackingService --> trackingDeployment[Tracking Deployment]
   artifactRoute --> artifactService[mlflow-artifacts Service]
-  artifactService --> artifactDeployment[Artifacts-only Deployment]
+  artifactService --> artifactDeployment[Metadata-aware artifact Deployment]
   artifactDeployment --> storage[Artifact storage]
 ```
 
-Both Deployments use the Kubernetes workspace provider and authorization plugin. The artifact
-server validates the request workspace before MLflow scopes proxied storage paths. Namespace
+Both Deployments use the Kubernetes workspace provider and authorization plugin, connect to the
+same metadata stores, and disable server-side job execution. The artifact server validates the
+request workspace before MLflow resolves metadata-backed artifact locations. Namespace
 `MLflowConfig` artifact-root overrides continue to produce direct storage URIs and therefore do
 not traverse the shared artifact route.
+
+Because both Deployments can access metadata, operator-managed migrations render both at zero
+replicas and wait for their live replica counts to reach zero before creating a migration Job. A
+split Deployment being disabled is quiesced before its cleanup is allowed to proceed.
 
 ### TLS Model
 

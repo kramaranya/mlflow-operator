@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	mlflowv1 "github.com/opendatahub-io/mlflow-operator/api/v1"
+	"github.com/opendatahub-io/mlflow-operator/internal/config"
 )
 
 var _ = Describe("Migration reconcile", func() {
@@ -662,7 +663,7 @@ var _ = Describe("Migration reconcile", func() {
 		Expect(k8sClient.Get(ctx, jobKey, &batchv1.Job{})).To(Succeed())
 	})
 
-	It("waits for all MLflow replicas to disappear before creating the migration Job", func() {
+	It("waits for tracking and artifact replicas to quiesce before creating the migration Job", func() {
 		ctx := context.Background()
 		namespace := "migration-quiesce"
 		Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
@@ -672,35 +673,74 @@ var _ = Describe("Migration reconcile", func() {
 		})
 
 		mlflow := newMLflow()
+		mlflow.Spec.BackendStoreURI = ptr("postgresql://db.example.com/mlflow")
+		mlflow.Spec.ServeArtifacts = ptr(false)
+		mlflow.Spec.Storage = nil
+		mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
+		mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
+		mlflow.Spec.Migration = &mlflowv1.MLflowMigrationConfig{Mode: mlflowv1.MLflowMigrateAlways}
 		Expect(k8sClient.Create(ctx, mlflow)).To(Succeed())
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, mlflow)).To(Succeed())
 
 		reconciler := newReconciler(namespace)
-		renderer := NewHelmRenderer("../../charts/mlflow")
-		objects, err := renderer.RenderChart(mlflow, namespace, RenderOptions{}, nil)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(reconciler.applyRenderedObjects(ctx, mlflow, objects)).To(Succeed())
-
-		deployment := &appsv1.Deployment{}
+		reconciler.HTTPRouteAvailable = true
+		reconciler.baseConfig = &config.OperatorConfig{
+			MLflowImage:         controllerTestMLflowImage,
+			GatewayName:         "data-science-gateway",
+			MLflowURL:           "https://gateway.example.com",
+			MLflowURLConfigured: true,
+		}
 		deploymentKey := types.NamespacedName{Name: ResourceName, Namespace: namespace}
-		Expect(k8sClient.Get(ctx, deploymentKey, deployment)).To(Succeed())
-		deployment.Status.Replicas = 1
-		deployment.Status.ReadyReplicas = 0
-		Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+		artifactDeploymentKey := types.NamespacedName{Name: ArtifactsResourceName, Namespace: namespace}
+		for _, key := range []types.NamespacedName{deploymentKey, artifactDeploymentKey} {
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      key.Name,
+					Namespace: key.Namespace,
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion: mlflowv1.GroupVersion.String(),
+						Kind:       "MLflow",
+						Name:       mlflow.Name,
+						UID:        mlflow.UID,
+						Controller: ptr(true),
+					}},
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: ptr(int32(1)),
+					Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": key.Name}},
+					Template: corev1.PodTemplateSpec{
+						ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": key.Name}},
+						Spec: corev1.PodSpec{Containers: []corev1.Container{{
+							Name:  "placeholder",
+							Image: "placeholder",
+						}}},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, deployment)).To(Succeed())
+			deployment.Status.Replicas = 1
+			deployment.Status.ReadyReplicas = 1
+			Expect(k8sClient.Status().Update(ctx, deployment)).To(Succeed())
+		}
 
-		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}})
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(migrationJobRequeueAfter))
 
 		jobKey := types.NamespacedName{Name: migrationJobName(mlflow), Namespace: namespace}
-		err = k8sClient.Get(ctx, jobKey, &batchv1.Job{})
-		Expect(errors.IsNotFound(err)).To(BeTrue())
+		Expect(errors.IsNotFound(k8sClient.Get(ctx, jobKey, &batchv1.Job{}))).To(BeTrue())
+		for _, key := range []types.NamespacedName{deploymentKey, artifactDeploymentKey} {
+			scaledDeployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, key, scaledDeployment)).To(Succeed())
+			Expect(scaledDeployment.Spec.Replicas).NotTo(BeNil())
+			Expect(*scaledDeployment.Spec.Replicas).To(BeZero())
+			Expect(scaledDeployment.Status.Replicas).To(Equal(int32(1)))
+			scaledDeployment.Status.Replicas = 0
+			scaledDeployment.Status.ReadyReplicas = 0
+			Expect(k8sClient.Status().Update(ctx, scaledDeployment)).To(Succeed())
+		}
 
-		updatedMLflow := &mlflowv1.MLflow{}
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: resourceName}, updatedMLflow)).To(Succeed())
-		condition := apimeta.FindStatusCondition(updatedMLflow.Status.Conditions, "Available")
-		Expect(condition).NotTo(BeNil())
-		Expect(condition.Reason).To(Equal("MigrationScalingDown"))
-		Expect(condition.Message).To(ContainSubstring("1 replicas remain"))
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: types.NamespacedName{Name: resourceName}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, jobKey, &batchv1.Job{})).To(Succeed())
 	})
 })

@@ -67,6 +67,8 @@ The framework supports configuration via environment variables:
 | `DISABLE_TLS` | Disable TLS verification | `true` | Both |
 | `artifact_storage` | Artifact storage type (`s3` or `file`) | `file` | Both |
 | `serve_artifacts` | Whether MLflow serves artifacts | `true` | Both |
+| `artifacts_server` | Whether the dedicated artifact-server integration topology is deployed | `false` | K8s |
+| `mlflow_namespace` | Namespace containing the MLflow Deployments | `opendatahub` | K8s |
 | `MLFLOW_S3_ENDPOINT_URL` | S3 endpoint URL | Optional | Both |
 | `AWS_ACCESS_KEY_ID` | AWS access key for S3 | Optional | Both |
 | `AWS_SECRET_ACCESS_KEY` | AWS secret key for S3 | Optional | Both |
@@ -110,6 +112,23 @@ uv run pytest --log-cli-level=INFO
 # Run specific test scenario
 uv run pytest tests/test_experiments.py -k "GET permission can get experiment"
 ```
+
+The `artifacts_server` case must run through the external Gateway, so it is intentionally absent
+from Kind-only matrices. On an OpenShift cluster whose MLflow operator has the external
+`MLFLOW_URL` and `data-science-gateway` configured, run:
+
+```bash
+ARTIFACTS_SERVER=true \
+ARTIFACT_BACKENDS=s3 \
+BACKEND_STORE=postgres \
+REGISTRY_STORE=postgres \
+INFRASTRUCTURE_PLATFORM=openshift \
+bash images/test-run.sh -m artifacts_server
+```
+
+The test uploads an artifact, calls the UI list and download compatibility paths with bearer and
+workspace headers, and verifies from access logs that the Gateway sent both requests to the
+`mlflow-artifacts` Deployment.
 
 ### Running Upgrade Phase Tests
 
@@ -171,6 +190,7 @@ The framework defines the following custom pytest markers:
 - **`@pytest.mark.Models`**: Test registered model RBAC and management operations
 - **`@pytest.mark.Traces`**: Test direct trace-ingestion RBAC and experiment-scoped trace authorization
 - **`@pytest.mark.Artifacts`**: Test artifact operations, model logging, and S3 storage verification
+- **`@pytest.mark.artifacts_server`**: Test authenticated UI artifact paths through a live Gateway
 - **`@pytest.mark.smoke`**: Fast sanity-check tests suitable for pre-merge smoke runs, including object-storage trace archival coverage that creates several traces, runs the operator CronJob as a one-shot Job, and checks archive-object creation plus post-archive readability with `SPANS_LOCATION=ARCHIVE_REPO`
 - **`@pytest.mark.pre_upgrade`**: Seed static MLflow state for upgrade validation
 - **`@pytest.mark.post_upgrade`**: Validate static MLflow state after an upgrade

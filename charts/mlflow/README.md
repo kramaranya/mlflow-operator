@@ -32,7 +32,8 @@ MLflow uses one replica URI for both tracking and model-registry reads. The repl
 ## Dedicated artifact server
 
 Set `artifactsServer.enabled=true` to render a separate MLflow Deployment and Service running
-with `--artifacts-only`. Also set `mlflow.serveArtifacts=false`, configure
+with `--serve-artifacts`, the same metadata stores as tracking, and server-side job execution
+disabled. Also set `mlflow.serveArtifacts=false`, configure
 `artifactsServer.artifactsDestination`, and set `artifactsServer.artifactRoot` to the externally
 reachable artifact API URL that the tracking server should advertise. For example:
 
@@ -45,11 +46,6 @@ artifactsServer:
   artifactRoot: https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
 ```
 
-The image must include the workspace-aware artifacts-only support from
-[`mlflow/mlflow#24452`](https://github.com/mlflow/mlflow/pull/24452), which permits
-`--artifacts-only` with `--enable-workspaces` and an explicit `--workspace-store-uri`. The ODH
-runtime includes this support; stock upstream MLflow `v3.14.0` does not.
-
 Dedicated artifact serving requires remote SQL metadata stores; inline SQLite metadata URIs are
 rejected, while Secret-backed metadata URIs cannot be inspected by Helm and must resolve to remote
 SQL. The tracking Deployment does not mount the PVC in this mode. When
@@ -59,7 +55,7 @@ destinations such as S3 do not mount persistent storage.
 `temporaryStorage.sizeLimit` configures the writable `/tmp` `emptyDir` in both server pods and
 defaults to `1Gi`; increase it for larger or more concurrent proxied artifact transfers.
 When garbage collection is enabled, the CronJob resolves `mlflow-artifacts:/` locations through
-the internal artifacts-only Service and its static prefix. Without a dedicated server, it uses the
+the internal artifact Service and its static prefix. Without a dedicated server, it uses the
 tracking Service and tracking static prefix instead.
 Dynamic Resource Allocation claims are workload-specific: configure artifact pod claims through
 `artifactsServer.resourceClaims` and reference them from `artifactsServer.resources.claims`.
@@ -67,14 +63,22 @@ Artifact pods never inherit top-level tracking claims; only requests and limits 
 `artifactsServer.resources` is empty.
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
-Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. Both servers
+Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. To preserve
+UI artifact operations, route and rewrite these tracking-relative paths to the artifact Service's
+`artifactsServer.staticPrefix` as well: `/get-artifact`, `/model-versions/get-artifact`,
+`/ajax-api/2.0/mlflow/artifacts/list`, `/ajax-api/2.0/mlflow/upload-artifact`,
+`/ajax-api/2.0/mlflow/get-artifact`, both v2 and v3 `get-trace-artifact` paths, and
+`/ajax-api/2.0/mlflow/logged-models/`. The logged-model prefix is necessarily broader than its
+artifact handlers because portable Gateway API matching cannot wildcard the model ID in the middle;
+non-artifact logged-model requests under that prefix will also reach the artifact Deployment.
+Both servers
 use the same image, Kubernetes workspace provider, artifact credentials, scheduling settings, and
-security contexts. The artifacts-only container explicitly clears backend, registry, and
-read-replica store URI variables, including values imported by shared `envFrom` sources. Provide
+security contexts. The artifact container receives the same primary, registry, and optional
+read-replica store URI configuration as tracking. Provide
 the TLS Secret configured by `artifactsServer.tls.secretName` when
 it is not provisioned by an OpenShift service-ca annotation.
-When `artifactsServer.workspaceStoreUri` points to SQL in a standalone deployment, configured CA
-bundles provide the artifact container with the same PostgreSQL and MySQL TLS environment as the
-tracking container.
+Configured CA bundles provide the artifact container with the same PostgreSQL and MySQL TLS
+environment as the tracking container. Because the standalone chart does not orchestrate
+migrations, stop both metadata-connected Deployments before migrating their shared stores.
 
 See `values.yaml` for the full list of configurable settings.

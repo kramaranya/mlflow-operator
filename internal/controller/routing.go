@@ -365,7 +365,34 @@ func (r *MLflowReconciler) reconcileHttpRoute(
 	return nil
 }
 
-// reconcileArtifactsHTTPRoute creates or updates the route for the dedicated artifacts-only server.
+func artifactHTTPRouteRule(matchPath, replacementPath, serviceName string) gatewayv1.HTTPRouteRule {
+	pathMatchType := gatewayv1.PathMatchPathPrefix
+	servicePort := gatewayv1.PortNumber(8443)
+	weight := int32(1)
+	return gatewayv1.HTTPRouteRule{
+		Matches: []gatewayv1.HTTPRouteMatch{{
+			Path: &gatewayv1.HTTPPathMatch{Type: &pathMatchType, Value: &matchPath},
+		}},
+		Filters: []gatewayv1.HTTPRouteFilter{{
+			Type: gatewayv1.HTTPRouteFilterURLRewrite,
+			URLRewrite: &gatewayv1.HTTPURLRewriteFilter{Path: &gatewayv1.HTTPPathModifier{
+				Type:               gatewayv1.PrefixMatchHTTPPathModifier,
+				ReplacePrefixMatch: &replacementPath,
+			}},
+		}},
+		BackendRefs: []gatewayv1.HTTPBackendRef{{
+			BackendRef: gatewayv1.BackendRef{
+				BackendObjectReference: gatewayv1.BackendObjectReference{
+					Name: gatewayv1.ObjectName(serviceName),
+					Port: &servicePort,
+				},
+				Weight: &weight,
+			},
+		}},
+	}
+}
+
+// reconcileArtifactsHTTPRoute creates or updates the route for the dedicated artifact server.
 func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 	ctx context.Context,
 	mlflow *mlflowv1.MLflow,
@@ -382,12 +409,50 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 	suffix := getResourceSuffix(mlflow.Name)
 	resourceName := ArtifactsResourceName + suffix
 	pathPrefix := "/" + resourceName
-	legacyArtifactPathPrefix := "/" + ResourceName + suffix + ArtifactsAPIPath
+	trackingPathPrefix := "/" + ResourceName + suffix
 	artifactPathPrefix := pathPrefix + ArtifactsAPIPath
 	pathMatchType := gatewayv1.PathMatchPathPrefix
 	servicePort := gatewayv1.PortNumber(8443)
 	weight := int32(1)
 	gatewayNamespace := gatewayv1.Namespace("openshift-ingress")
+
+	rules := []gatewayv1.HTTPRouteRule{
+		artifactHTTPRouteRule(trackingPathPrefix+ArtifactsAPIPath, artifactPathPrefix, resourceName),
+	}
+	// MLflow's UI resolves these artifact operations through metadata-aware tracking handlers.
+	for _, endpoint := range []string{
+		"/get-artifact",
+		"/model-versions/get-artifact",
+		"/ajax-api/2.0/mlflow/artifacts/list",
+		"/ajax-api/2.0/mlflow/upload-artifact",
+		"/ajax-api/2.0/mlflow/get-artifact",
+		"/ajax-api/2.0/mlflow/get-trace-artifact",
+		"/ajax-api/3.0/mlflow/get-trace-artifact",
+	} {
+		rules = append(rules, artifactHTTPRouteRule(trackingPathPrefix+endpoint, pathPrefix+endpoint, resourceName))
+	}
+	// Gateway API cannot portably wildcard the model ID in the middle of artifact paths. This is
+	// the narrowest prefix available, so other logged-model APIs also reach the metadata-aware pod.
+	loggedModelsPrefix := "/ajax-api/2.0/mlflow/logged-models/"
+	rules = append(rules, artifactHTTPRouteRule(
+		trackingPathPrefix+loggedModelsPrefix,
+		pathPrefix+loggedModelsPrefix,
+		resourceName,
+	))
+	rules = append(rules, gatewayv1.HTTPRouteRule{
+		Matches: []gatewayv1.HTTPRouteMatch{{
+			Path: &gatewayv1.HTTPPathMatch{Type: &pathMatchType, Value: &pathPrefix},
+		}},
+		BackendRefs: []gatewayv1.HTTPBackendRef{{
+			BackendRef: gatewayv1.BackendRef{
+				BackendObjectReference: gatewayv1.BackendObjectReference{
+					Name: gatewayv1.ObjectName(resourceName),
+					Port: &servicePort,
+				},
+				Weight: &weight,
+			},
+		}},
+	})
 
 	httpRoute := &gatewayv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{
@@ -410,61 +475,7 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 					},
 				},
 			},
-			Rules: []gatewayv1.HTTPRouteRule{
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &legacyArtifactPathPrefix,
-							},
-						},
-					},
-					Filters: []gatewayv1.HTTPRouteFilter{
-						{
-							Type: gatewayv1.HTTPRouteFilterURLRewrite,
-							URLRewrite: &gatewayv1.HTTPURLRewriteFilter{
-								Path: &gatewayv1.HTTPPathModifier{
-									Type:               gatewayv1.PrefixMatchHTTPPathModifier,
-									ReplacePrefixMatch: &artifactPathPrefix,
-								},
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(resourceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-				{
-					Matches: []gatewayv1.HTTPRouteMatch{
-						{
-							Path: &gatewayv1.HTTPPathMatch{
-								Type:  &pathMatchType,
-								Value: &pathPrefix,
-							},
-						},
-					},
-					BackendRefs: []gatewayv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayv1.BackendRef{
-								BackendObjectReference: gatewayv1.BackendObjectReference{
-									Name: gatewayv1.ObjectName(resourceName),
-									Port: &servicePort,
-								},
-								Weight: &weight,
-							},
-						},
-					},
-				},
-			},
+			Rules: rules,
 		},
 	}
 
