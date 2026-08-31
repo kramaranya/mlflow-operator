@@ -474,7 +474,9 @@ DB_SSLMODE="${DB_SSLMODE:-}"
 
 # LC_ALL=C is required: macOS tr treats /dev/urandom as UTF-8 and exits with
 # "Illegal byte sequence" under a UTF-8 locale (set -e then aborts the script).
-RANDOM_SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c 8)
+# Read a finite blob first so tr sees EOF instead of SIGPIPE; with pipefail,
+# `tr </dev/urandom | head` exits 141 on Linux and aborts the suite.
+RANDOM_SUFFIX=$(head -c 256 /dev/urandom | LC_ALL=C tr -dc 'a-z0-9' | head -c 8)
 WORKSPACE_LIST="${workspaces:-workspace1-${RANDOM_SUFFIX},workspace2-${RANDOM_SUFFIX}}"
 if [ -n "$INFERRED_UPGRADE_PHASE" ]; then
     WORKSPACE_LIST="$UPGRADE_TEST_WORKSPACE"
