@@ -146,6 +146,26 @@ func (r *MLflowReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 		return ctrl.Result{}, err
 	}
+	if err := r.validateArtifactsServerMetadataStores(ctx, mlflow, targetNamespace); err != nil {
+		setObservedURLs(mlflow, targetNamespace, false, cfg)
+		log.Error(err, "Failed to validate artifacts server metadata stores")
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Available",
+			Status:  metav1.ConditionFalse,
+			Reason:  "MetadataStoreValidationFailed",
+			Message: err.Error(),
+		})
+		meta.SetStatusCondition(&mlflow.Status.Conditions, metav1.Condition{
+			Type:    "Progressing",
+			Status:  metav1.ConditionFalse,
+			Reason:  "MetadataStoreValidationFailed",
+			Message: err.Error(),
+		})
+		if statusErr := r.updateStatus(ctx, mlflow); statusErr != nil {
+			log.Error(statusErr, "Failed to update MLflow status after metadata store validation")
+		}
+		return ctrl.Result{}, err
+	}
 
 	// Clean up GC resources when garbage collection is disabled.
 	if mlflow.Spec.GarbageCollection == nil {

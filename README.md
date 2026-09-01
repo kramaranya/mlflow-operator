@@ -426,10 +426,12 @@ Gateway API `HTTPRoute` resource to be available. `artifactsDestination` must be
 If the `HTTPRoute` API is unavailable, reconciliation rejects split serving before changing the
 existing tracking workload or creating dedicated artifact resources.
 It requires a remote SQL metadata store; inline SQLite backend, registry, and read-replica URIs
-are rejected. CEL cannot inspect Secret values, so `backendStoreUriFrom` and related Secret
-references must resolve to remote SQL URIs. For a `file://` artifact destination, one artifact
-replica may use `ReadWriteOnce`; multiple artifact replicas require `ReadWriteMany` as the first
-storage access mode. The operator creates:
+are rejected. Although CEL cannot inspect Secret values, the operator resolves every configured
+`backendStoreUriFrom`, `registryStoreUriFrom`, and `readReplicaBackendStoreUriFrom` key through
+the API before rendering or mutating operands. Missing Secrets or keys and values that are not
+remote PostgreSQL or MySQL URIs fail reconciliation. For a `file://` artifact destination, one
+artifact replica may use `ReadWriteOnce`; multiple artifact replicas require `ReadWriteMany` as
+the first storage access mode. The operator creates:
 
 - The normal `mlflow` tracking Deployment, Service, and `/mlflow` HTTPRoute
 - An `mlflow-artifacts` Deployment running with `--serve-artifacts`, the same metadata-store

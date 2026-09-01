@@ -180,8 +180,9 @@ mlflow:
 # Operator deployments keep port, staticPrefix, TLS, and Service settings fixed so they stay
 # aligned with the managed HTTPRoute and serving-certificate contract.
 # Dedicated serving requires remote SQL metadata stores and does not mount storage in the
-# tracking pod. Inline SQLite metadata URIs are rejected; Secret-backed metadata URIs cannot
-# be inspected by Helm and must resolve to remote SQL.
+# tracking pod. Inline SQLite metadata URIs are rejected. Standalone Helm cannot inspect
+# Secret-backed values, which must resolve to remote SQL; operator reconciliation validates
+# those Secret keys before rendering.
 # The server uses --serve-artifacts and the same metadata stores as the tracking server so UI
 # artifact handlers can resolve runs, model versions, traces, and logged models. Server-side
 # job execution remains disabled.

@@ -176,6 +176,83 @@ var _ = Describe("MLflow Controller", func() {
 			Expect(mlflow.Status.Address.URL).To(Equal("https://mlflow.opendatahub.svc:8443/mlflow"))
 		})
 
+		It("should reject Secret-backed SQLite split serving before mutating workloads", func() {
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "database-uri", Namespace: "opendatahub"},
+				Data:       map[string][]byte{"uri": []byte("sqlite:////mlflow/mlflow.db")},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, secret))).To(Succeed())
+			})
+
+			trackingKey := types.NamespacedName{Name: ResourceName, Namespace: "opendatahub"}
+			tracking := &appsv1.Deployment{}
+			err := k8sClient.Get(ctx, trackingKey, tracking)
+			if errors.IsNotFound(err) {
+				tracking = &appsv1.Deployment{
+					ObjectMeta: metav1.ObjectMeta{Name: ResourceName, Namespace: "opendatahub"},
+					Spec: appsv1.DeploymentSpec{
+						Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "existing-tracking"}},
+						Template: corev1.PodTemplateSpec{
+							ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "existing-tracking"}},
+							Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "mlflow", Image: "existing:image"}}},
+						},
+					},
+				}
+				Expect(k8sClient.Create(ctx, tracking)).To(Succeed())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				tracking.OwnerReferences = nil
+				tracking.Spec.Template.Spec.Containers[0].Image = "existing:image"
+				Expect(k8sClient.Update(ctx, tracking)).To(Succeed())
+			}
+			DeferCleanup(func() {
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, tracking))).To(Succeed())
+			})
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			mlflow.Spec.BackendStoreURI = nil
+			mlflow.Spec.BackendStoreURIFrom = secretSelector("database-uri", "uri", false)
+			mlflow.Spec.DefaultArtifactRoot = nil
+			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
+			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}
+			Expect(k8sClient.Update(ctx, mlflow)).To(Succeed())
+
+			controllerReconciler := &MLflowReconciler{
+				Client:                  k8sClient,
+				APIReader:               k8sClient,
+				Scheme:                  k8sClient.Scheme(),
+				Namespace:               "opendatahub",
+				ChartPath:               "../../charts/mlflow",
+				HTTPRouteAvailable:      true,
+				GCRBACWatchCache:        mustNewGCRBACWatchCache(),
+				ServiceMonitorAvailable: false,
+				baseConfig: &config.OperatorConfig{
+					MLflowImage:         controllerTestMLflowImage,
+					MLflowURL:           "https://gateway.example.com",
+					MLflowURLConfigured: true,
+				},
+			}
+			_, reconcileErr := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(reconcileErr).To(MatchError(ContainSubstring(
+				"spec.backendStoreUri must resolve to a remote PostgreSQL or MySQL URI",
+			)))
+
+			unchangedTracking := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, trackingKey, unchangedTracking)).To(Succeed())
+			Expect(unchangedTracking.Spec.Template.Spec.Containers[0].Image).To(Equal("existing:image"))
+			Expect(errors.IsNotFound(k8sClient.Get(ctx, types.NamespacedName{
+				Name: ArtifactsResourceName, Namespace: "opendatahub",
+			}, &appsv1.Deployment{}))).To(BeTrue())
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
+			condition := meta.FindStatusCondition(mlflow.Status.Conditions, "Available")
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("MetadataStoreValidationFailed"))
+		})
+
 		It("should reject split serving before mutating workloads when HTTPRoute is unavailable", func() {
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.ServeArtifacts = ptr(true)

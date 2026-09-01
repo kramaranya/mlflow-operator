@@ -48,8 +48,9 @@ artifactsServer:
 ```
 
 Dedicated artifact serving requires remote SQL metadata stores; inline SQLite metadata URIs are
-rejected, while Secret-backed metadata URIs cannot be inspected by Helm and must resolve to remote
-SQL. The tracking Deployment does not mount the PVC in this mode. When
+rejected. Secret-backed metadata URIs cannot be inspected by standalone Helm and must resolve to
+remote SQL; the operator resolves and validates configured Secret keys before rendering. The
+tracking Deployment does not mount the PVC in this mode. When
 `artifactsServer.artifactsDestination` uses `file://`, set `storage.enabled=true`; one artifact
 replica may use `ReadWriteOnce`, while multiple replicas require `ReadWriteMany`. Remote artifact
 destinations such as S3 do not mount persistent storage.
