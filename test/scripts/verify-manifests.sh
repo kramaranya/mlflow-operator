@@ -109,11 +109,28 @@ for chart_dir in charts/*/; do
 
         echo "  Rendering dedicated metadata-aware artifact server..."
         ARTIFACT_SERVER_SETS="mlflow.backendStoreUri=postgresql://db/mlflow,mlflow.serveArtifacts=false,artifactsServer.enabled=true,artifactsServer.artifactsDestination=s3://bucket/artifacts,artifactsServer.artifactRoot=https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts"
-        if helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" > /dev/null 2>&1; then
+        if ARTIFACT_SERVER_RENDER=$(helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" 2>&1); then
             echo -e "  ${GREEN}✓ Dedicated artifact server renders successfully${NC}"
+            ARTIFACT_DEPLOYMENT_RENDER=$(awk '
+                /# Source: mlflow\/templates\/artifacts-deployment.yaml/ { found=1; next }
+                found && /^---$/ { exit }
+                found { print }
+            ' <<< "$ARTIFACT_SERVER_RENDER")
+            if awk '
+                /^[[:space:]]*- --allowed-hosts$/ {
+                    getline
+                    if ($0 ~ /^[[:space:]]*- "\*"$/) found=1
+                }
+                END { exit !found }
+            ' <<< "$ARTIFACT_DEPLOYMENT_RENDER"; then
+                echo -e "  ${GREEN}✓ Artifact server accepts Gateway Host headers by default${NC}"
+            else
+                echo -e "  ${RED}✗ Artifact server is missing the default wildcard allowed-hosts argument${NC}"
+                chart_failed=1
+            fi
         else
             echo -e "  ${RED}✗ Dedicated artifact server failed to render${NC}"
-            helm template test "$chart_dir" --set "$ARTIFACT_SERVER_SETS" || true
+            printf '%s\n' "$ARTIFACT_SERVER_RENDER"
             chart_failed=1
         fi
 

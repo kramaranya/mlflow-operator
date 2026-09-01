@@ -45,7 +45,13 @@ artifactsServer:
   enabled: true
   artifactsDestination: s3://mlflow-artifacts
   artifactRoot: https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
+  allowedHosts:
+    - mlflow.example.com
 ```
+
+`artifactsServer.allowedHosts` defaults to `["*"]` so Gateway Host headers reach the dedicated
+server, matching operator-managed deployments. Standalone production installs should replace the
+wildcard with their externally reachable Gateway hostname or hostnames.
 
 Dedicated artifact serving requires remote SQL metadata stores; inline SQLite metadata URIs are
 rejected. Secret-backed metadata URIs cannot be inspected by standalone Helm and must resolve to

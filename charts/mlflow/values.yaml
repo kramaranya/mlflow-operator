@@ -204,7 +204,10 @@ artifactsServer:
   # Number of uvicorn workers in each MLflow artifacts-server pod.
   workers: 1
   port: 8443
-  allowedHosts: []
+  # Accept Gateway Host headers by default, matching operator-managed deployments.
+  # Standalone production installs should restrict this to their external hostnames.
+  allowedHosts:
+    - "*"
   staticPrefix: "/mlflow-artifacts"
   # Pod-level Dynamic Resource Allocation claims for artifact pods. Pair each entry
   # with a same-named resources.claims reference below.

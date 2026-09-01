@@ -173,6 +173,9 @@ helm install mlflow . -n opendatahub --create-namespace \
 ```
 
 The standalone Helm chart does not orchestrate MLflow database migrations. Bootstrap or migrate the database yourself before rolling out a standalone Helm upgrade.
+When enabling the dedicated artifact server, `artifactsServer.allowedHosts` defaults to `["*"]`
+so external Gateway Host headers are accepted. Production installs should replace the wildcard
+with their Gateway hostname or hostnames; see [`charts/mlflow/README.md`](charts/mlflow/README.md).
 
 ## Configuration
 
