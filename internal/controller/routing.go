@@ -410,14 +410,22 @@ func (r *MLflowReconciler) reconcileArtifactsHTTPRoute(
 	resourceName := ArtifactsResourceName + suffix
 	pathPrefix := "/" + resourceName
 	trackingPathPrefix := "/" + ResourceName + suffix
-	artifactPathPrefix := pathPrefix + ArtifactsAPIPath
 	pathMatchType := gatewayv1.PathMatchPathPrefix
 	servicePort := gatewayv1.PortNumber(8443)
 	weight := int32(1)
 	gatewayNamespace := gatewayv1.Namespace("openshift-ingress")
 
 	rules := []gatewayv1.HTTPRouteRule{
-		artifactHTTPRouteRule(trackingPathPrefix+ArtifactsAPIPath, artifactPathPrefix, resourceName),
+		artifactHTTPRouteRule(
+			trackingPathPrefix+ArtifactsProxyAPIPath,
+			pathPrefix+ArtifactsProxyAPIPath,
+			resourceName,
+		),
+		artifactHTTPRouteRule(
+			trackingPathPrefix+ArtifactsAJAXProxyAPIPath,
+			pathPrefix+ArtifactsAJAXProxyAPIPath,
+			resourceName,
+		),
 	}
 	// MLflow's UI resolves these artifact operations through metadata-aware tracking handlers.
 	for _, endpoint := range []string{

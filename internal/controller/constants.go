@@ -23,8 +23,12 @@ const (
 	ResourceName = "mlflow"
 	// ArtifactsResourceName is the base name used for dedicated artifact-serving resources.
 	ArtifactsResourceName = "mlflow-artifacts"
-	// ArtifactsAPIPath is the MLflow proxied artifact API path.
-	ArtifactsAPIPath = "/api/2.0/mlflow-artifacts/artifacts"
+	// ArtifactsProxyAPIPath is the MLflow proxied artifact API family prefix.
+	ArtifactsProxyAPIPath = "/api/2.0/mlflow-artifacts"
+	// ArtifactsAJAXProxyAPIPath is the AJAX alias for the proxied artifact API family.
+	ArtifactsAJAXProxyAPIPath = "/ajax-api/2.0/mlflow-artifacts"
+	// ArtifactsAPIPath is the proxied artifact root advertised to MLflow clients.
+	ArtifactsAPIPath = ArtifactsProxyAPIPath + "/artifacts"
 	// ClusterRoleName is the name of the shared ClusterRole used by all MLflow instances
 	ClusterRoleName = "mlflow"
 	// ClusterRoleBindingName is the name of the shared ClusterRoleBinding used by all MLflow instances

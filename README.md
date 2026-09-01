@@ -444,9 +444,11 @@ root, so `spec.defaultArtifactRoot` must be omitted in this mode. MLflow clients
 artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
 `spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.
 Experiments created before split serving may retain `mlflow-artifacts:/` artifact locations. The
-artifact HTTPRoute also matches their tracking-relative `/mlflow/api/2.0/mlflow-artifacts/artifacts`
-requests and rewrites them to the dedicated route, so enabling split serving does not require
-rewriting existing experiment or run metadata. Per-resource suffixes are preserved on both paths.
+artifact HTTPRoute also matches their complete tracking-relative `/mlflow/api/2.0/mlflow-artifacts`
+and `/mlflow/ajax-api/2.0/mlflow-artifacts` proxy families and rewrites them to the dedicated route.
+This includes artifact transfer, multipart upload, and presigned-download requests, so enabling split
+serving does not require rewriting existing experiment or run metadata. Per-resource suffixes are
+preserved on both paths.
 The artifact HTTPRoute also rewrites the narrow set of tracking-relative UI handlers that require
 metadata to resolve artifact locations: run and model-version downloads, artifact listing and
 upload, trace artifacts, and logged-model artifact operations. All other `/mlflow` traffic remains
@@ -472,7 +474,8 @@ independently; artifact resources inherit the main server resources when omitted
 
 The live compatibility test requires an OpenShift cluster with the configured Gateway and verifies
 that authenticated, workspace-scoped `/mlflow/get-artifact` and
-`/mlflow/ajax-api/2.0/mlflow/artifacts/list` requests are served by the artifact Deployment:
+`/mlflow/ajax-api/2.0/mlflow/artifacts/list` requests plus a tracking-relative multipart create/abort
+flow are served by the artifact Deployment:
 
 ```bash
 ARTIFACTS_SERVER=true \

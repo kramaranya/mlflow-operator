@@ -102,9 +102,11 @@ When the dedicated artifact server is enabled, the gateway additionally exposes
 `/mlflow-artifacts`. The tracking server advertises the full artifact API root at
 `/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts`, so clients direct artifact traffic to
 the second Service without changing the tracking URI. A more-specific compatibility match routes
-the legacy `/mlflow/api/2.0/mlflow-artifacts/artifacts` path to the same Service and rewrites it to
-the dedicated prefix. Existing `mlflow-artifacts:/` experiment and run locations therefore remain
-usable after split serving is enabled without giving the tracking Deployment artifact storage.
+the legacy `/mlflow/api/2.0/mlflow-artifacts` and `/mlflow/ajax-api/2.0/mlflow-artifacts` proxy
+families to the same Service and rewrites them to the dedicated prefix. Artifact transfers,
+multipart operations, and presigned downloads for existing `mlflow-artifacts:/` experiment and run
+locations therefore remain usable after split serving is enabled without giving the tracking
+Deployment artifact storage.
 The artifact route also rewrites tracking-relative UI artifact handlers that need metadata lookups.
 Run/model-version downloads, artifact list/upload, trace-artifact, and logged-model artifact requests
 use the artifact Service; the general `/mlflow` route continues to select tracking. Because Gateway

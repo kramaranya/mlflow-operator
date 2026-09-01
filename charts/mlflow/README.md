@@ -64,8 +64,11 @@ Artifact pods never inherit top-level tracking claims; only requests and limits 
 
 The standalone chart creates only the artifacts Deployment and Service. It does not create an
 Ingress or `HTTPRoute`; expose the Service at the configured `artifactRoot` yourself. To preserve
-UI artifact operations, route and rewrite these tracking-relative paths to the artifact Service's
-`artifactsServer.staticPrefix` as well: `/get-artifact`, `/model-versions/get-artifact`,
+existing `mlflow-artifacts:/` locations, route and rewrite the complete tracking-relative
+`/api/2.0/mlflow-artifacts` and `/ajax-api/2.0/mlflow-artifacts` proxy families to the artifact
+Service's `artifactsServer.staticPrefix`, including artifact, multipart, and presigned operations.
+To preserve UI artifact operations, route and rewrite these tracking-relative paths as well:
+`/get-artifact`, `/model-versions/get-artifact`,
 `/ajax-api/2.0/mlflow/artifacts/list`, `/ajax-api/2.0/mlflow/upload-artifact`,
 `/ajax-api/2.0/mlflow/get-artifact`, both v2 and v3 `get-trace-artifact` paths, and
 `/ajax-api/2.0/mlflow/logged-models/`. The logged-model prefix is necessarily broader than its

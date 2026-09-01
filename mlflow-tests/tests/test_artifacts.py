@@ -269,7 +269,7 @@ class TestMLflowArtifacts(TestBase):
     reason="requires an ARTIFACTS_SERVER=true Gateway integration deployment",
 )
 class TestMLflowArtifactsServer(TestBase):
-    def test_ui_artifact_handlers_are_served_by_artifact_deployment(
+    def test_compatibility_paths_are_served_by_artifact_deployment(
         self, create_user_with_permissions
     ) -> None:
         workspace = Config.WORKSPACES[0]
@@ -323,9 +323,35 @@ class TestMLflowArtifactsServer(TestBase):
         download_response.raise_for_status()
         assert download_response.text == self.test_context.temp_artifact_content
 
+        mpu_artifact_path = f"{self.test_context.active_experiment_id}/{run_id}"
+        mpu_file = "probe.bin"
+        create_mpu_path = (
+            f"/api/2.0/mlflow-artifacts/mpu/create/{mpu_artifact_path}"
+        )
+        abort_mpu_path = (
+            f"/api/2.0/mlflow-artifacts/mpu/abort/{mpu_artifact_path}"
+        )
+        create_response = requests.post(
+            f"{base_uri}{create_mpu_path}",
+            json={"path": mpu_file, "num_parts": 1},
+            **request_args,
+        )
+        create_response.raise_for_status()
+        create_payload = create_response.json()
+        upload_id = create_payload["upload_id"]
+        assert upload_id
+        abort_response = requests.post(
+            f"{base_uri}{abort_mpu_path}",
+            json={"path": mpu_file, "upload_id": upload_id},
+            **request_args,
+        )
+        abort_response.raise_for_status()
+
         expected_paths = {
             "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",
             "/mlflow-artifacts/get-artifact",
+            f"/mlflow-artifacts{create_mpu_path}",
+            f"/mlflow-artifacts{abort_mpu_path}",
         }
         deadline = time.monotonic() + 30
         observed_paths = set()
@@ -347,6 +373,6 @@ class TestMLflowArtifactsServer(TestBase):
                 time.sleep(1)
 
         assert observed_paths == expected_paths, (
-            "artifact Deployment access logs did not record all Gateway-rewritten UI requests; "
+            "artifact Deployment access logs did not record all Gateway-rewritten requests; "
             f"observed {sorted(observed_paths)}"
         )
