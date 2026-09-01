@@ -192,7 +192,7 @@ artifactsServer:
   # storage.enabled=true. One replica may use ReadWriteOnce; multiple replicas require
   # storage.accessMode=ReadWriteMany.
   artifactsDestination: "file:///mlflow/artifacts"
-  # Externally reachable artifact API root advertised by the tracking server, for example:
+  # Externally reachable artifact API root used as the default by both servers, for example:
   # https://mlflow.example.com/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts
   artifactRoot: ""
   # Standalone installs may use a SQL workspace store. When caBundle.configMaps is

@@ -99,9 +99,9 @@ The route model is designed around a public `/mlflow` prefix:
 This lets the service keep its normal internal API paths while still fitting behind a stable product-facing prefix.
 
 When the dedicated artifact server is enabled, the gateway additionally exposes
-`/mlflow-artifacts`. The tracking server advertises the full artifact API root at
-`/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts`, so clients direct artifact traffic to
-the second Service without changing the tracking URI. A more-specific compatibility match routes
+`/mlflow-artifacts`. Both metadata-connected servers use the full artifact API root at
+`/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts`, so any metadata they create directs artifact
+traffic to the second Service without changing the tracking URI. A more-specific compatibility match routes
 the legacy `/mlflow/api/2.0/mlflow-artifacts` and `/mlflow/ajax-api/2.0/mlflow-artifacts` proxy
 families to the same Service and rewrites them to the dedicated prefix. Artifact transfers,
 multipart operations, and presigned downloads for existing `mlflow-artifacts:/` experiment and run

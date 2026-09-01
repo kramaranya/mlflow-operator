@@ -95,6 +95,7 @@ func TestRenderChartArtifactsServer(t *testing.T) {
 	for _, arg := range []string{
 		"--serve-artifacts",
 		"--artifacts-destination=s3://bucket/artifacts",
+		"--default-artifact-root=https://gateway.example.com/base/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts",
 		"--app-name=kubernetes-auth",
 		"--enable-workspaces",
 		"--workspace-store-uri=kubernetes://",

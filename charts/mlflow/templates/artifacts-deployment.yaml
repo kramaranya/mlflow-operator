@@ -91,6 +91,7 @@ spec:
             - server
             - --serve-artifacts
             - --artifacts-destination={{ .Values.artifactsServer.artifactsDestination }}
+            - --default-artifact-root={{ .Values.artifactsServer.artifactRoot }}
             - --app-name=kubernetes-auth
             - --enable-workspaces
             - --workspace-store-uri={{ .Values.artifactsServer.workspaceStoreUri }}

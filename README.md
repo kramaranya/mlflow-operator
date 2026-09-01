@@ -438,8 +438,8 @@ storage access mode. The operator creates:
 - A separate `mlflow-artifacts-tls` serving-certificate request on OpenShift; on other
   Kubernetes distributions, provide that Secret before enabling the feature
 
-The tracking server runs with `--no-serve-artifacts` and advertises
-`<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as its default artifact
+The tracking server runs with `--no-serve-artifacts`, and both metadata-connected servers use
+`<MLFLOW_URL>/mlflow-artifacts/api/2.0/mlflow-artifacts/artifacts` as their default artifact
 root, so `spec.defaultArtifactRoot` must be omitted in this mode. MLflow clients therefore continue to use the tracking server for metadata while sending
 artifact uploads and downloads to the dedicated route. The tracking Deployment does not mount
 `spec.storage` in this mode; a file-backed destination is mounted only by the artifact Deployment.

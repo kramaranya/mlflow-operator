@@ -35,7 +35,8 @@ Set `artifactsServer.enabled=true` to render a separate MLflow Deployment and Se
 with `--serve-artifacts`, the same metadata stores as tracking, and server-side job execution
 disabled. Also set `mlflow.serveArtifacts=false`, configure
 `artifactsServer.artifactsDestination`, and set `artifactsServer.artifactRoot` to the externally
-reachable artifact API URL that the tracking server should advertise. For example:
+reachable artifact API URL that both metadata-connected servers should use as their default root.
+For example:
 
 ```yaml
 mlflow:
