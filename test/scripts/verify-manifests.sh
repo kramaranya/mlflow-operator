@@ -97,6 +97,40 @@ for chart_dir in charts/*/; do
             chart_failed=1
         fi
 
+        TRACE_REMOTE_SECRET_SETS="$SECRETREF_SETS,mlflow.artifactsDestination=s3://bucket/artifacts,traceArchival.enabled=true,traceArchival.schedule=0 0 * * *,traceArchival.location=s3://bucket/trace-archive,traceArchival.retention=1m,storage.enabled=false"
+        echo "  Rendering trace archival with Secret-backed remote metadata and no storage..."
+        if TRACE_REMOTE_SECRET_RENDER=$(helm template test "$chart_dir" --set "$TRACE_REMOTE_SECRET_SETS" 2>&1); then
+            TRACE_ARCHIVAL_CRONJOB_RENDER=$(awk '
+                /# Source: mlflow\/templates\/trace-archival-cronjob.yaml/ { found=1; next }
+                found && /^---$/ { exit }
+                found { print }
+            ' <<< "$TRACE_REMOTE_SECRET_RENDER")
+            if grep -Fq 'name: mlflow-storage' <<< "$TRACE_ARCHIVAL_CRONJOB_RENDER"; then
+                echo -e "  ${RED}✗ Trace archival unexpectedly mounts storage for Secret-backed remote metadata${NC}"
+                chart_failed=1
+            else
+                echo -e "  ${GREEN}✓ Secret-backed remote metadata renders without persistent storage${NC}"
+            fi
+        else
+            echo -e "  ${RED}✗ Secret-backed remote metadata failed to render without persistent storage${NC}"
+            printf '%s\n' "$TRACE_REMOTE_SECRET_RENDER"
+            chart_failed=1
+        fi
+
+        echo "  Rejecting trace archival with Secret-backed metadata and ReadWriteOnce storage..."
+        TRACE_SECRET_RWO_ERROR=$(helm template test "$chart_dir" \
+            --set "$TRACE_REMOTE_SECRET_SETS,storage.enabled=true,storage.accessMode=ReadWriteOnce" 2>&1) && trace_secret_rwo_accepted=1 || trace_secret_rwo_accepted=0
+        if [ "$trace_secret_rwo_accepted" -eq 1 ]; then
+            echo -e "  ${RED}✗ Secret-backed metadata with ReadWriteOnce storage was accepted${NC}"
+            chart_failed=1
+        elif grep -Fq "trace archival with persistent metadata storage requires storage.enabled=true and storage.accessMode=ReadWriteMany" <<< "$TRACE_SECRET_RWO_ERROR"; then
+            echo -e "  ${GREEN}✓ Secret-backed metadata with ReadWriteOnce storage rejected${NC}"
+        else
+            echo -e "  ${RED}✗ Secret-backed metadata with ReadWriteOnce storage returned an unexpected error${NC}"
+            printf '%s\n' "$TRACE_SECRET_RWO_ERROR"
+            chart_failed=1
+        fi
+
         echo "  Rejecting malformed read-replica secret ref..."
         if helm template test "$chart_dir" \
             --set "mlflow.backendStoreUri=sqlite:////mlflow/mlflow.db" \

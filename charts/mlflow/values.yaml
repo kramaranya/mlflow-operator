@@ -364,6 +364,8 @@ traceArchival:
   # Required when enabled.
   schedule: "0 */6 * * *"
   # A file:// location requires storage.enabled=true and ReadWriteMany access.
+  # Secret-backed metadata without storage.enabled is treated as remote; when storage is
+  # enabled, its unknown scheme requires ReadWriteMany so the CronJob can share the PVC safely.
   # location: "s3://mlflow-trace-archive"
   # retention: "30d"
   maxTracesPerPass: 1000

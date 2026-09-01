@@ -3,7 +3,7 @@
 {{- if and .Values.traceArchival.location (hasPrefix "file://" .Values.traceArchival.location) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
 {{- fail "enabled file-based traceArchival.location requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
 {{- end }}
-{{- if and (or (eq (include "mlflow.backendUsesStorage" .) "true") (eq (include "mlflow.registryUsesStorage" .) "true")) (or (not .Values.storage.enabled) (ne .Values.storage.accessMode "ReadWriteMany")) }}
+{{- if and .Values.storage.enabled (or (eq (include "mlflow.backendUsesStorage" .) "true") (eq (include "mlflow.registryUsesStorage" .) "true")) (ne .Values.storage.accessMode "ReadWriteMany") }}
 {{- fail "trace archival with persistent metadata storage requires storage.enabled=true and storage.accessMode=ReadWriteMany" }}
 {{- end }}
 apiVersion: batch/v1

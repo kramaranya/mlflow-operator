@@ -394,7 +394,7 @@ When `traceArchival.enabled` is true, the operator:
 - The MLflow server's built-in scheduler stays disabled (`MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false`); the CronJob handles archival externally, which avoids multi-replica coordination entirely
 - The CronJob uses the `mlflow-trace-archival-sa` ServiceAccount
 
-A `file://` archival location shares persistent storage with the MLflow workload and therefore requires `storage.accessModes[0]` to be `ReadWriteMany`. Trace archival also requires `ReadWriteMany` when its CronJob shares PVC-backed metadata such as SQLite with the tracking pod. If an existing deployment uses `ReadWriteOnce`, preserve its data and recreate the MLflow resource and PVC with `ReadWriteMany` before enabling trace archival; Kubernetes cannot change an existing PVC's access modes in place.
+A `file://` archival location shares persistent storage with the MLflow workload and therefore requires `storage.accessModes[0]` to be `ReadWriteMany`. Trace archival also requires `ReadWriteMany` when its CronJob shares PVC-backed metadata such as SQLite with the tracking pod. A Secret-backed metadata URI without `spec.storage` is treated as remote SQL and does not mount a PVC; when `spec.storage` is configured, its unknown scheme is handled conservatively as potentially local. If an existing deployment uses `ReadWriteOnce`, preserve its data and recreate the MLflow resource and PVC with `ReadWriteMany` before enabling trace archival; Kubernetes cannot change an existing PVC's access modes in place.
 
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
@@ -516,8 +516,8 @@ tracking Service normally and through the internal artifact Service in split mod
 keeps historical `mlflow-artifacts:/` locations deletable after enabling the dedicated server
 without depending on the external Gateway. The CronJob mounts persistent storage only when its
 backend metadata URI may be local, so PostgreSQL with proxied remote artifacts does not attach an
-unused PVC. Trace archival mounts storage for a `file://` archive location or local/secret-backed
-metadata.
+unused PVC. Trace archival mounts storage for a `file://` archive location or configured storage
+that may contain local metadata; Secret-backed remote SQL without `spec.storage` does not mount one.
 
 ### CORS Configuration
 
