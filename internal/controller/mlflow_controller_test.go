@@ -213,7 +213,7 @@ var _ = Describe("MLflow Controller", func() {
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, mlflow)).To(Succeed())
 			mlflow.Spec.BackendStoreURI = nil
-			mlflow.Spec.BackendStoreURIFrom = secretSelector("database-uri", "uri", false)
+			mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("database-uri", "uri", false)
 			mlflow.Spec.DefaultArtifactRoot = nil
 			mlflow.Spec.ArtifactsDestination = ptr("s3://bucket/artifacts")
 			mlflow.Spec.ArtifactsServer = &mlflowv1.ArtifactsServerSpec{Enabled: true}

@@ -73,7 +73,7 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 
 	t.Run("does not inspect metadata stores when dedicated serving is disabled", func(t *testing.T) {
 		mlflow := &mlflowv1.MLflow{Spec: mlflowv1.MLflowSpec{
-			BackendStoreURIFrom: secretSelector("missing", "uri", false),
+			BackendStoreURIFrom: metadataStoreSecretSelector("missing", "uri", false),
 		}}
 
 		if err := (&MLflowReconciler{}).validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub"); err != nil {
@@ -121,9 +121,9 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 		}
 		reader := &countingReader{Reader: secretReader(t, secret)}
 		mlflow := artifactsServerMLflow()
-		mlflow.Spec.BackendStoreURIFrom = secretSelector("database-uris", "backend", false)
-		mlflow.Spec.RegistryStoreURIFrom = secretSelector("database-uris", "registry", false)
-		mlflow.Spec.ReadReplicaBackendStoreURIFrom = secretSelector("database-uris", "replica", false)
+		mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("database-uris", "backend", false)
+		mlflow.Spec.RegistryStoreURIFrom = metadataStoreSecretSelector("database-uris", "registry", false)
+		mlflow.Spec.ReadReplicaBackendStoreURIFrom = metadataStoreSecretSelector("database-uris", "replica", false)
 
 		err := (&MLflowReconciler{APIReader: reader}).validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
 		if err != nil {
@@ -169,7 +169,7 @@ func TestValidateArtifactsServerMetadataStores(t *testing.T) {
 				Data:       map[string][]byte{"uri": []byte("sqlite://user:do-not-log@/mlflow.db")},
 			}
 			mlflow := artifactsServerMLflow()
-			test.configure(&mlflow.Spec, secretSelector("database-uri", "uri", false))
+			test.configure(&mlflow.Spec, metadataStoreSecretSelector("database-uri", "uri", false))
 
 			err := (&MLflowReconciler{APIReader: secretReader(t, secret)}).
 				validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
@@ -189,7 +189,7 @@ func TestValidateArtifactsServerMetadataStoreSecretFailures(t *testing.T) {
 	t.Run("rejects a missing key even when the selector is optional", func(t *testing.T) {
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "database-uri", Namespace: "opendatahub"}}
 		mlflow := artifactsServerMLflow()
-		mlflow.Spec.BackendStoreURIFrom = secretSelector("database-uri", "uri", true)
+		mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("database-uri", "uri", true)
 
 		err := (&MLflowReconciler{APIReader: secretReader(t, secret)}).
 			validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
@@ -200,7 +200,7 @@ func TestValidateArtifactsServerMetadataStoreSecretFailures(t *testing.T) {
 
 	t.Run("returns Secret lookup errors", func(t *testing.T) {
 		mlflow := artifactsServerMLflow()
-		mlflow.Spec.BackendStoreURIFrom = secretSelector("database-uri", "uri", false)
+		mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("database-uri", "uri", false)
 		forbidden := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "database-uri", nil)
 		reconciler := &MLflowReconciler{APIReader: &errorReader{err: forbidden}}
 
@@ -212,7 +212,7 @@ func TestValidateArtifactsServerMetadataStoreSecretFailures(t *testing.T) {
 
 	t.Run("rejects a missing Secret", func(t *testing.T) {
 		mlflow := artifactsServerMLflow()
-		mlflow.Spec.BackendStoreURIFrom = secretSelector("missing", "uri", false)
+		mlflow.Spec.BackendStoreURIFrom = metadataStoreSecretSelector("missing", "uri", false)
 
 		err := (&MLflowReconciler{APIReader: secretReader(t)}).
 			validateArtifactsServerMetadataStores(ctx, mlflow, "opendatahub")
@@ -222,7 +222,7 @@ func TestValidateArtifactsServerMetadataStoreSecretFailures(t *testing.T) {
 	})
 }
 
-func secretSelector(name, key string, optional bool) *corev1.SecretKeySelector {
+func metadataStoreSecretSelector(name, key string, optional bool) *corev1.SecretKeySelector {
 	return &corev1.SecretKeySelector{
 		LocalObjectReference: corev1.LocalObjectReference{Name: name},
 		Key:                  key,
