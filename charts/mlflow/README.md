@@ -81,6 +81,8 @@ security contexts. The artifact container receives the same primary, registry, a
 read-replica store URI configuration as tracking. Provide
 the TLS Secret configured by `artifactsServer.tls.secretName` when
 it is not provisioned by an OpenShift service-ca annotation.
+When metrics are enabled, the `ServiceMonitor` selects only the tracking Service; the artifact
+server does not run with `--expose-prometheus`.
 Configured CA bundles provide the artifact container with the same PostgreSQL and MySQL TLS
 environment as the tracking container. Because the standalone chart does not orchestrate
 migrations, stop both metadata-connected Deployments before migrating their shared stores.

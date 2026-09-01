@@ -24,4 +24,5 @@ spec:
   selector:
     matchLabels:
       app: mlflow{{ .Values.resourceSuffix }}
+      app.kubernetes.io/component: tracking-server
 {{- end }}

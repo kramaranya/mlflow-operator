@@ -463,6 +463,9 @@ tracking and artifact-serving pods; increase it for larger or more concurrent pr
 Both deployments use `kubernetes://` as the workspace provider and Kubernetes authorization.
 They share the image, ServiceAccount, workspace label selector, artifact credentials, CA bundles,
 security contexts, scheduling configuration, and primary/registry/read-replica metadata URIs.
+When metrics are enabled, the `ServiceMonitor` selects only the tracking Service because only the
+tracking server runs with `--expose-prometheus`; the artifact Service retains the shared `app` label
+for operator cache membership without becoming a scrape target.
 This metadata-aware deployment is a short-term compatibility topology for UI artifact handlers;
 server-side job execution is disabled in both deployments to avoid duplicate background work.
 The shared CA configuration includes PostgreSQL and MySQL client settings as well as HTTP and S3,

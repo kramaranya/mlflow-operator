@@ -115,6 +115,9 @@ API cannot portably match the model ID in the middle of logged-model artifact pa
 metadata-aware artifact Deployment.
 The garbage-collection CronJob bypasses the external Gateway but follows the same compatibility
 model by resolving those locations against the internal artifact Service and static prefix.
+Both Services retain the instance `app` label used by the operator cache, while the `ServiceMonitor`
+also requires the tracking-only `app.kubernetes.io/component: tracking-server` label because the
+artifact server does not enable Prometheus exposition.
 The controller verifies that the `HTTPRoute` API is available before cleanup, migration, chart
 rendering, or operand application, preventing a missing routing capability from causing a partial
 split-server rollout.

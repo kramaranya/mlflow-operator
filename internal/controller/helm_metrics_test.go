@@ -146,12 +146,19 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	mlflow := &mlflowv1.MLflow{
 		ObjectMeta: metav1.ObjectMeta{Name: "test-mlflow"},
 		Spec: mlflowv1.MLflowSpec{
-			BackendStoreURI: ptr(testBackendStoreURI),
+			BackendStoreURI:      ptr(testBackendStoreURI),
+			ArtifactsDestination: ptr("s3://bucket/artifacts"),
+			ArtifactsServer:      &mlflowv1.ArtifactsServerSpec{Enabled: true},
 		},
 	}
 
 	// Render chart on OpenShift - CA-based tlsConfig should be set
-	objs, err := renderer.RenderChart(mlflow, "opendatahub", RenderOptions{IsOpenShift: true, ServiceMonitorAvailable: true}, nil)
+	objs, err := renderer.RenderChart(
+		mlflow,
+		"opendatahub",
+		RenderOptions{IsOpenShift: true, ServiceMonitorAvailable: true},
+		artifactServerTestConfig(),
+	)
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	var serviceMonitor *unstructured.Unstructured
@@ -204,6 +211,17 @@ func TestRenderChart_ServiceMonitorWithTLSConfig(t *testing.T) {
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 	g.Expect(found).To(gomega.BeTrue())
 	g.Expect(matchLabels["app"]).To(gomega.Equal("mlflow-test-mlflow"))
+	g.Expect(matchLabels["app.kubernetes.io/component"]).To(gomega.Equal("tracking-server"))
+
+	trackingService := findObject(objs, "Service", "mlflow-test-mlflow")
+	g.Expect(trackingService).NotTo(gomega.BeNil())
+	g.Expect(trackingService.GetLabels()).To(gomega.HaveKeyWithValue("app", "mlflow-test-mlflow"))
+	g.Expect(trackingService.GetLabels()).To(gomega.HaveKeyWithValue("app.kubernetes.io/component", "tracking-server"))
+
+	artifactService := findObject(objs, "Service", "mlflow-artifacts-test-mlflow")
+	g.Expect(artifactService).NotTo(gomega.BeNil())
+	g.Expect(artifactService.GetLabels()).To(gomega.HaveKeyWithValue("app", "mlflow-test-mlflow"))
+	g.Expect(artifactService.GetLabels()).NotTo(gomega.HaveKey("app.kubernetes.io/component"))
 
 	// On OpenShift, TLS secret should use 0640 (416) since SCC provides fsGroup
 	deployment := findObject(objs, deploymentKind, "mlflow-test-mlflow")

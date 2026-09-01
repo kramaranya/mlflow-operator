@@ -5,6 +5,7 @@ metadata:
   namespace: {{ .Values.namespace }}
   labels:
     app: mlflow{{ .Values.resourceSuffix }}
+    app.kubernetes.io/component: tracking-server
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
