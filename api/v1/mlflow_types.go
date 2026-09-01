@@ -181,8 +181,8 @@ type MLflowSpec struct {
 	//   - "gs://my-bucket/mlflow/artifacts" (no Storage needed)
 	// This field is required when ArtifactsServer is enabled. When only ServeArtifacts is
 	// enabled and this field is omitted, it defaults to "file:///mlflow/artifacts".
-	// A file-based destination used by ArtifactsServer requires Storage with ReadWriteMany
-	// as its first access mode because the tracking and artifact Deployments share the PVC.
+	// In split mode, the tracking Deployment does not mount Storage. One file-backed artifact
+	// replica may use ReadWriteOnce; multiple replicas require ReadWriteMany as the first access mode.
 	//
 	// For cloud storage authentication, use EnvFrom to inject credentials from secrets or configmaps.
 	// Example for S3:
