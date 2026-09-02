@@ -396,6 +396,8 @@ When `traceArchival.enabled` is true, the operator:
 
 A `file://` archival location shares persistent storage with the MLflow workload and therefore requires `storage.accessModes[0]` to be `ReadWriteMany`. Trace archival also requires `ReadWriteMany` when its CronJob shares PVC-backed metadata such as SQLite with the tracking pod. A Secret-backed metadata URI without `spec.storage` is treated as remote SQL and does not mount a PVC; when `spec.storage` is configured, its unknown scheme is handled conservatively as potentially local. If an existing deployment uses `ReadWriteOnce`, preserve its data and recreate the MLflow resource and PVC with `ReadWriteMany` before enabling trace archival; Kubernetes cannot change an existing PVC's access modes in place.
 
+The repository's test deployer creates `ReadWriteOnce` storage whenever either metadata store is SQLite. It therefore enables its S3 trace-archival smoke configuration only when both the backend and registry stores use PostgreSQL; S3 matrix rows involving SQLite continue to test tracking and artifact behavior without deploying the archival CronJob.
+
 When trace archival is disabled or the CR is deleted, the operator cleans up the CronJob, ConfigMap, and ServiceAccount.
 
 See `config/samples/mlflow_v1_mlflow_trace_archival.yaml` for a complete example.

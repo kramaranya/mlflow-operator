@@ -124,8 +124,8 @@ Other:
   MLFLOW_SA_NAME        Service account name created by the operator (default: mlflow-sa)
   TRACE_ARCHIVAL_RETENTION
                         Retention configured on spec.traceArchival for s3/externals3
-                        deploys (default: 1m for harness-driven runs so semantic
-                        archival smoke coverage can archive fresh test traces)
+                        deploys with PostgreSQL backend and registry stores (default:
+                        1m so semantic archival smoke coverage can archive fresh traces)
   workspaces            Comma-separated workspace namespace list (default: two random names)
   upgrade_test_workspace Static workspace namespace for upgrade pytest phases. During
                         upgrade-phase runs, the harness derives workspaces and RBAC
@@ -1112,6 +1112,13 @@ run_suite() {
     export artifacts_server="${ARTIFACTS_SERVER}"
     export mlflow_namespace="${NAMESPACE}"
     export AWS_S3_BUCKET="${AWS_S3_BUCKET:-${BUCKET:-}}"
+    local deployed_trace_archival
+    if ! deployed_trace_archival="$(kubectl get mlflow "$MLFLOW_NAME" -o jsonpath='{.spec.traceArchival.enabled}')"; then
+        echo "ERROR: Failed to read trace archival state from MLflow CR ${MLFLOW_NAME}" >&2
+        fail_suite "test_read_trace_archival_state" "Failed to read trace archival state from MLflow CR ${MLFLOW_NAME}"
+        return 1
+    fi
+    export trace_archival_enabled="${deployed_trace_archival:-false}"
 
     local results_file="${TEST_RESULTS_DIR}/xunit_report_${STORAGE_TYPE}.xml"
     echo "  Running tests (output: $results_file)..."

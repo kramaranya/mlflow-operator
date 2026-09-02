@@ -55,6 +55,14 @@ class MLflowDeployer:
         """Return the repo path for CI/local-test-only manifests."""
         return self.ci_test_infra_root.joinpath(*parts)
 
+    def _trace_archival_enabled(self) -> bool:
+        """Return whether the test deployment can run archival without sharing its RWO PVC."""
+        return (
+            self.args.artifact_storage in ("s3", "externals3")
+            and self.args.backend_store == "postgres"
+            and self.args.registry_store == "postgres"
+        )
+
     def _set_env_file_value(self, path: Path, key: str, value: str, description=None) -> None:
         """Set KEY=value in a params.env file without GNU sed -i (breaks on macOS)."""
         if description:
@@ -802,6 +810,7 @@ class MLflowDeployer:
         use_postgres_backend = self.args.backend_store == "postgres"
         use_postgres_registry = self.args.registry_store == "postgres"
         use_s3_artifacts = self.args.artifact_storage in ("s3", "externals3")
+        enable_trace_archival = self._trace_archival_enabled()
 
         # Nothing to wait for here — _setup_tls_ca_bundle (called below, after all
         # infra certs are gathered) handles the propagation wait internally.
@@ -864,15 +873,15 @@ class MLflowDeployer:
                     {"name": "MLFLOW_S3_ENDPOINT_URL", "value": self.args.s3_endpoint}
                 )
 
-            # Enable trace archival against the same bucket with a non-firing
-            # schedule. Live Jobs are created from the CronJob template in tests.
-            mlflow_cr["spec"]["traceArchival"] = {
-                "enabled": True,
-                "schedule": "0 0 1 1 *",
-                "location": f"s3://{self.args.s3_bucket}/trace-archive",
-                "retention": self.args.trace_archival_retention,
-                "maxTracesPerPass": 1000,
-            }
+            if enable_trace_archival:
+                # Use a non-firing schedule; tests create live Jobs from the CronJob template.
+                mlflow_cr["spec"]["traceArchival"] = {
+                    "enabled": True,
+                    "schedule": "0 0 1 1 *",
+                    "location": f"s3://{self.args.s3_bucket}/trace-archive",
+                    "retention": self.args.trace_archival_retention,
+                    "maxTracesPerPass": 1000,
+                }
         else:
             # File-based artifact storage
             # IMPORTANT: MLflow operator validation requires serveArtifacts=true when using file-based storage
@@ -1356,11 +1365,13 @@ class MLflowDeployer:
         print(f"  Artifact Storage: {self.args.artifact_storage}")
         print(f"  Serve Artifacts: {self.args.serve_artifacts}")
         print(f"  Dedicated Artifacts Server: {self.args.artifacts_server}")
-        if self.args.artifact_storage in ("s3", "externals3"):
+        if self._trace_archival_enabled():
             print(
                 "  Trace Archival: enabled "
                 f"(s3://{self.args.s3_bucket}/trace-archive, retention={self.args.trace_archival_retention})"
             )
+        elif self.args.artifact_storage in ("s3", "externals3"):
+            print("  Trace Archival: disabled (requires PostgreSQL backend and registry stores)")
         self._print_and_require_cluster()
         print()
 
@@ -1528,7 +1539,7 @@ def main():
                        help="AWS region (optional; used when --artifact-storage externals3)")
     parser.add_argument("--trace-archival-retention", default="30d",
                        help="Retention passed to spec.traceArchival when artifact storage is s3 or externals3 "
-                            "(default: 30d).")
+                            "and both metadata stores use PostgreSQL (default: 30d).")
     parser.add_argument("--workspace-label-selector", default="")
 
     args = parser.parse_args()

@@ -89,8 +89,8 @@ class TestTraceArchival(TestBase):
     ]
 
     @pytest.mark.skipif(
-        Config.ARTIFACT_STORAGE != "s3",
-        reason="trace archival live Job requires object storage (artifact_storage=s3)",
+        Config.ARTIFACT_STORAGE != "s3" or not Config.TRACE_ARCHIVAL_ENABLED,
+        reason="trace archival live Job requires object storage and an enabled trace archival configuration",
     )
     @pytest.mark.parametrize("test_data", test_scenarios, ids=lambda x: x.test_name)
     def test_trace_archival_job_archives_multiple_traces(self, test_data: TestData) -> None:
