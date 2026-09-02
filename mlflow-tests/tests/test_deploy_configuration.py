@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -88,6 +89,64 @@ def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) ->
     deployer.deploy_mlflow_operator()
 
     assert ("mlflow-url", "https://localhost:8444") in updates
+
+
+@pytest.mark.smoke
+@pytest.mark.artifacts_server
+def test_kind_overlay_rebakes_operator_values_from_overlay_params(tmp_path: Path) -> None:
+    repo_root = Path(__file__).parents[2]
+    test_repo = tmp_path / "repo"
+    overlay = test_repo / ".github/test-infra/overlays/kind"
+    shutil.copytree(repo_root / "config", test_repo / "config")
+    shutil.copytree(repo_root / ".github/test-infra/overlays/kind", overlay)
+
+    overrides = {
+        "MLFLOW_IMAGE": "localhost/mlflow:test-runtime",
+        "MLFLOW_OPERATOR_IMAGE": "localhost/mlflow-operator:test-manager",
+        "gateway-name": "kind-test-gateway",
+        "mlflow-url": "https://localhost:8444",
+        "section-title": "Kind MLflow Test",
+    }
+    params = overlay / "params.env"
+    entries = [line.split("=", 1) for line in params.read_text().splitlines() if line]
+    params.write_text(
+        "\n".join(f"{key}={overrides.get(key, value)}" for key, value in entries) + "\n"
+    )
+    (overlay / "tls.crt").write_text("test certificate")
+    (overlay / "tls.key").write_text("test key")
+
+    kustomize = shutil.which("kustomize")
+    if kustomize is None:
+        local_kustomize = repo_root / "bin/kustomize"
+        if not local_kustomize.is_file():
+            pytest.skip("kustomize is required to verify the rendered Kind overlay")
+        kustomize = str(local_kustomize)
+
+    result = subprocess.run(
+        [kustomize, "build", str(overlay)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    objects = [obj for obj in yaml.safe_load_all(result.stdout) if obj]
+    deployment = next(
+        obj
+        for obj in objects
+        if obj.get("kind") == "Deployment"
+        and obj["metadata"]["name"] == "mlflow-operator-controller-manager"
+    )
+    manager = next(
+        container
+        for container in deployment["spec"]["template"]["spec"]["containers"]
+        if container["name"] == "manager"
+    )
+    environment = {entry["name"]: entry.get("value") for entry in manager["env"]}
+
+    assert manager["image"] == overrides["MLFLOW_OPERATOR_IMAGE"]
+    assert environment["MLFLOW_IMAGE"] == overrides["MLFLOW_IMAGE"]
+    assert environment["GATEWAY_NAME"] == overrides["gateway-name"]
+    assert environment["MLFLOW_URL"] == overrides["mlflow-url"]
+    assert environment["SECTION_TITLE"] == overrides["section-title"]
 
 
 @pytest.mark.parametrize(

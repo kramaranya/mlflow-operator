@@ -285,6 +285,8 @@ class MLflowDeployer:
             f"Setting operator image to {self.args.mlflow_operator_image}",
         )
         if self.args.mlflow_url:
+            # The Kind overlay re-bakes this into the operator Deployment. Updating
+            # the ConfigMap alone leaves MLFLOW_URL at the config/base placeholder.
             self._set_env_file_value(
                 base_params_env, "mlflow-url", self.args.mlflow_url,
                 f"Setting external MLflow URL to {self.args.mlflow_url}",

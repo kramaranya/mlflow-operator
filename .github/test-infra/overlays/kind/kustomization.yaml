@@ -29,9 +29,10 @@ patches:
       kind: Deployment
       name: mlflow-operator-controller-manager
 
-# Add operator image replacement for dev/kind overlay
+# Base replacements bake config/base/params.env into the Deployment before this
+# overlay replaces the ConfigMap. Re-apply image and env values from Kind's
+# params.env so overrides such as --mlflow-url actually reach the operator.
 replacements:
-# Replace operator image using value from params.env
 - source:
     kind: ConfigMap
     name: operator-params
@@ -42,6 +43,46 @@ replacements:
       name: mlflow-operator-controller-manager
     fieldPaths:
     - spec.template.spec.containers.[name=manager].image
+- source:
+    kind: ConfigMap
+    name: operator-params
+    fieldPath: data.MLFLOW_IMAGE
+  targets:
+  - select:
+      kind: Deployment
+      name: mlflow-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=MLFLOW_IMAGE].value
+- source:
+    kind: ConfigMap
+    name: operator-params
+    fieldPath: data.gateway-name
+  targets:
+  - select:
+      kind: Deployment
+      name: mlflow-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=GATEWAY_NAME].value
+- source:
+    kind: ConfigMap
+    name: operator-params
+    fieldPath: data.mlflow-url
+  targets:
+  - select:
+      kind: Deployment
+      name: mlflow-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=MLFLOW_URL].value
+- source:
+    kind: ConfigMap
+    name: operator-params
+    fieldPath: data.section-title
+  targets:
+  - select:
+      kind: Deployment
+      name: mlflow-operator-controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=manager].env.[name=SECTION_TITLE].value
 
 
 # Override operator params with kind-specific values
