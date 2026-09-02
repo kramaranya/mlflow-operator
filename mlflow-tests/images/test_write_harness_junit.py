@@ -73,12 +73,12 @@ def test_write_harness_error_junit_does_not_overwrite_existing(tmp_path: Path) -
     ("overrides", "expected_message"),
     [
         (
-            {"INFRASTRUCTURE_PLATFORM": "base"},
-            "ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster.",
+            {"ARTIFACTS_SERVER_GATEWAY": "true", "INFRASTRUCTURE_PLATFORM": "base"},
+            "ARTIFACTS_SERVER_GATEWAY=true requires a Gateway-capable OpenShift cluster.",
         ),
         (
-            {"FORCE_PORT_FORWARD": "true"},
-            "ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway.",
+            {"ARTIFACTS_SERVER_GATEWAY": "true", "FORCE_PORT_FORWARD": "true"},
+            "ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway.",
         ),
         (
             {"BACKEND_STORE": "sqlite"},
@@ -88,8 +88,18 @@ def test_write_harness_error_junit_does_not_overwrite_existing(tmp_path: Path) -
             {"ARTIFACT_BACKENDS": "file"},
             "ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend.",
         ),
+        (
+            {"ARTIFACTS_SERVER": "false", "ARTIFACTS_SERVER_GATEWAY": "true"},
+            "ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true.",
+        ),
     ],
-    ids=["non-openshift", "port-forward", "sqlite-metadata", "non-s3-backend"],
+    ids=[
+        "gateway-non-openshift",
+        "gateway-port-forward",
+        "sqlite-metadata",
+        "non-s3-backend",
+        "gateway-without-server",
+    ],
 )
 def test_invalid_artifacts_server_config_writes_harness_junit(
     tmp_path: Path, overrides: dict[str, str], expected_message: str
@@ -112,6 +122,7 @@ def test_invalid_artifacts_server_config_writes_harness_junit(
             "MLFLOW_TEST_SUPPORTED_VERSION": "3.14",
             "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
             "ARTIFACTS_SERVER": "true",
+            "ARTIFACTS_SERVER_GATEWAY": "false",
             "INFRASTRUCTURE_PLATFORM": "openshift",
             "FORCE_PORT_FORWARD": "false",
             "SKIP_CLEANUP": "false",
@@ -228,6 +239,7 @@ def test_artifacts_server_readiness_failure_writes_harness_junit(
             "MLFLOW_TEST_SUPPORTED_VERSION": "3.14",
             "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
             "ARTIFACTS_SERVER": "true",
+            "ARTIFACTS_SERVER_GATEWAY": "true",
             "ARTIFACT_FAILURE_MODE": failure_mode,
             "INFRASTRUCTURE_PLATFORM": "openshift",
             "FORCE_PORT_FORWARD": "false",

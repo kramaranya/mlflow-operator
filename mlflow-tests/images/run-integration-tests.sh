@@ -22,13 +22,30 @@
 #   WORKSPACE_LABEL_SELECTOR    label selector JSON (default: empty)
 #   POSTGRES_TLS                true | false (default: false)
 #   SEAWEEDFS_TLS               true | false (default: false)
+#   ARTIFACTS_SERVER            true | false (default: false)
+#   ARTIFACTS_SERVER_GATEWAY    true | false (default: false)
 #   PYTEST_ARGS                 extra pytest flags
+#   PYTEST_MARK_EXPRESSION      optional pytest -m expression
 #   TEST_RESULTS_DIR            host path for JUnit XML output (default: test-results)
 
 set -euo pipefail
 
 results_dir="${TEST_RESULTS_DIR:-test-results}"
 mkdir -p "$results_dir"
+
+if [ "${ARTIFACTS_SERVER:-false}" = "true" ]; then
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  if ! kubectl get crd httproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    kubectl apply -f "$repo_root/test/crd/httproutes.gateway.networking.k8s.io.yaml"
+  fi
+  kubectl wait --for=condition=Established \
+    crd/httproutes.gateway.networking.k8s.io --timeout=60s
+fi
+
+pytest_marker_args=()
+if [ -n "${PYTEST_MARK_EXPRESSION:-}" ]; then
+  pytest_marker_args=(-m "$PYTEST_MARK_EXPRESSION")
+fi
 
 set +e
 docker run --rm --network host \
@@ -42,6 +59,8 @@ docker run --rm --network host \
   -e REGISTRY_STORE="$REGISTRY_STORE" \
   -e ARTIFACT_BACKENDS="$ARTIFACT_BACKENDS" \
   -e SERVE_ARTIFACTS="$SERVE_ARTIFACTS" \
+  -e ARTIFACTS_SERVER="${ARTIFACTS_SERVER:-false}" \
+  -e ARTIFACTS_SERVER_GATEWAY="${ARTIFACTS_SERVER_GATEWAY:-false}" \
   -e AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
   -e AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
   -e AWS_S3_BUCKET="$AWS_S3_BUCKET" \
@@ -51,7 +70,7 @@ docker run --rm --network host \
   -e SEAWEEDFS_TLS="${SEAWEEDFS_TLS:-false}" \
   -e TEST_RESULTS_DIR="/mlflow/results" \
   "$MLFLOW_TESTS_RUNTIME_IMAGE" \
-  ${PYTEST_ARGS:-}
+  ${PYTEST_ARGS:-} "${pytest_marker_args[@]}"
 
 exit_code=$?
 set -e

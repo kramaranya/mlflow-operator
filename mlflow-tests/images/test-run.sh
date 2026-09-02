@@ -98,8 +98,11 @@ Operator / OpenShift:
   FORCE_PORT_FORWARD      true|false — always port-forward the MLflow service to localhost,
                           even on OpenShift (default: false)
   ARTIFACTS_SERVER        true|false — enable and test the dedicated metadata-aware artifact
-                          server (default: false). Requires OpenShift Gateway routing,
-                          PostgreSQL backend/registry stores, and one S3 backend.
+                          server (default: false). Requires the HTTPRoute API, PostgreSQL
+                          backend/registry stores, and one S3 backend. Generic Kubernetes
+                          accesses the artifact Service through localhost:8444.
+  ARTIFACTS_SERVER_GATEWAY true|false — validate live Gateway route acceptance and rewrites
+                          (default: false). Requires ARTIFACTS_SERVER=true and OpenShift.
 
 Skip / control flags:
   SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false)
@@ -374,6 +377,7 @@ FAIL_FAST="${FAIL_FAST:-true}"
 FORCE_PORT_FORWARD="${FORCE_PORT_FORWARD:-false}"
 SERVE_ARTIFACTS="${SERVE_ARTIFACTS:-${serve_artifacts:-true}}"
 ARTIFACTS_SERVER="${ARTIFACTS_SERVER:-false}"
+ARTIFACTS_SERVER_GATEWAY="${ARTIFACTS_SERVER_GATEWAY:-false}"
 OVERALL_EXIT=0
 
 ARTIFACT_BACKENDS_CONFIGURED=false
@@ -435,13 +439,13 @@ if [ -z "${INFRASTRUCTURE_PLATFORM:-}" ]; then
 fi
 
 if [ "$ARTIFACTS_SERVER" = "true" ]; then
-    if [ "$INFRASTRUCTURE_PLATFORM" != "openshift" ]; then
-        echo "ERROR: ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster." >&2
-        fail_run "test_config" "ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster."
+    if [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ] && [ "$INFRASTRUCTURE_PLATFORM" != "openshift" ]; then
+        echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true requires a Gateway-capable OpenShift cluster." >&2
+        fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true requires a Gateway-capable OpenShift cluster."
     fi
-    if [ "$FORCE_PORT_FORWARD" = "true" ]; then
-        echo "ERROR: ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
-        fail_run "test_config" "ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway."
+    if [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ] && [ "$FORCE_PORT_FORWARD" = "true" ]; then
+        echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
+        fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway."
     fi
     if [ "$BACKEND_STORE" != "postgres" ] || [ "$REGISTRY_STORE" != "postgres" ]; then
         echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
@@ -452,6 +456,9 @@ if [ "$ARTIFACTS_SERVER" = "true" ]; then
         fail_run "test_config" "ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend."
     fi
     SERVE_ARTIFACTS=false
+elif [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ]; then
+    echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true." >&2
+    fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true."
 fi
 
 # Infrastructure image overrides
@@ -486,6 +493,7 @@ export workspaces="$WORKSPACE_LIST"
 
 PF_PID=""
 S3_PF_PID=""
+ARTIFACTS_PF_PID=""
 _CREATED_WORKSPACES=""  # tracks only namespaces created by this run (not pre-existing)
 # Set to true after the first suite so subsequent suites skip re-deploying the operator.
 _OPERATOR_DEPLOYED=false
@@ -528,8 +536,10 @@ should_use_mlflow_prefixed_health_endpoint() {
 stop_port_forwards() {
     [ -n "$PF_PID" ] && kill -0 "$PF_PID" 2>/dev/null && kill "$PF_PID"
     [ -n "$S3_PF_PID" ] && kill -0 "$S3_PF_PID" 2>/dev/null && kill "$S3_PF_PID"
+    [ -n "$ARTIFACTS_PF_PID" ] && kill -0 "$ARTIFACTS_PF_PID" 2>/dev/null && kill "$ARTIFACTS_PF_PID"
     PF_PID=""
     S3_PF_PID=""
+    ARTIFACTS_PF_PID=""
 }
 
 cleanup_self_managed_infrastructure() {
@@ -658,7 +668,7 @@ wait_for_mlflow_server_info() {
 }
 
 wait_for_artifacts_server_route() {
-    echo "  Waiting for the dedicated artifact Deployment and Gateway route..."
+    echo "  Waiting for the dedicated artifact Deployment..."
     if ! kubectl wait --for=condition=Available deployment/mlflow-artifacts \
         --namespace "$NAMESPACE" --timeout=300s; then
         echo "ERROR: mlflow-artifacts Deployment did not become available" >&2
@@ -667,6 +677,12 @@ wait_for_artifacts_server_route() {
             "mlflow-artifacts Deployment did not become available"
         return 1
     fi
+
+    if [ "$ARTIFACTS_SERVER_GATEWAY" != "true" ]; then
+        return 0
+    fi
+
+    echo "  Waiting for the dedicated artifact Gateway route..."
 
     local retry=0
     local max_retries=60
@@ -689,7 +705,7 @@ wait_for_artifacts_server_route() {
     local artifacts_url=""
     retry=0
     max_retries=12
-    until artifacts_url=$(kubectl get mlflow "$MLFLOW_NAME" -o jsonpath='{.status.artifactsUrl}' 2>/dev/null) && \
+    until artifacts_url=$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}' 2>/dev/null) && \
         [ -n "$artifacts_url" ]; do
         retry=$((retry + 1))
         if [ "$retry" -ge "$max_retries" ]; then
@@ -875,6 +891,11 @@ run_suite() {
             --serve-artifacts       "$SERVE_ARTIFACTS"
         )
         [ "$ARTIFACTS_SERVER" = "true" ] && deploy_args+=(--artifacts-server)
+        if [ "$ARTIFACTS_SERVER" = "true" ] && \
+           [ "$ARTIFACTS_SERVER_GATEWAY" != "true" ] && \
+           [ "$INFRASTRUCTURE_PLATFORM" != "openshift" ]; then
+            deploy_args+=(--mlflow-url "https://localhost:8444")
+        fi
         [ -n "${MLFLOW_RESOLVED_IMAGE}" ] && deploy_args+=(--mlflow-image "$MLFLOW_RESOLVED_IMAGE")
 
         [ -n "${POSTGRES_IMAGE:-}"  ] && deploy_args+=(--postgres-image  "$POSTGRES_IMAGE")
@@ -1058,6 +1079,20 @@ run_suite() {
     if [ "$ARTIFACTS_SERVER" = "true" ] && ! wait_for_artifacts_server_route; then
         return 1
     fi
+    if [ "$ARTIFACTS_SERVER" = "true" ]; then
+        if [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ]; then
+            local published_artifacts_url
+            published_artifacts_url="$(kubectl get mlflow "$MLFLOW_NAME" -n "$NAMESPACE" -o jsonpath='{.status.artifactsUrl}')"
+            export MLFLOW_ARTIFACTS_URI="${published_artifacts_url%/api/2.0/mlflow-artifacts/artifacts}"
+        else
+            echo "  Port-forwarding dedicated artifact service to localhost:8444..."
+            kubectl port-forward "svc/mlflow-artifacts" -n "$NAMESPACE" 8444:8443 &
+            ARTIFACTS_PF_PID=$!
+            sleep 2
+            export MLFLOW_ARTIFACTS_URI="https://localhost:8444/mlflow-artifacts"
+        fi
+        echo "  MLFLOW_ARTIFACTS_URI=$MLFLOW_ARTIFACTS_URI"
+    fi
 
     if [ "$INFERRED_UPGRADE_PHASE" = "post_upgrade" ]; then
         echo "  Waiting for MLflow CR status.version to reach ${SUPPORTED_MLFLOW_VERSION_RAW}..."
@@ -1116,6 +1151,7 @@ run_suite() {
     export serve_artifacts="${SERVE_ARTIFACTS}"
     export TRACE_ARCHIVAL_RETENTION
     export artifacts_server="${ARTIFACTS_SERVER}"
+    export artifacts_server_gateway="${ARTIFACTS_SERVER_GATEWAY}"
     export mlflow_namespace="${NAMESPACE}"
     export AWS_S3_BUCKET="${AWS_S3_BUCKET:-${BUCKET:-}}"
     local deployed_trace_archival

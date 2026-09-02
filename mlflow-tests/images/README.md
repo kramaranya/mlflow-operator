@@ -134,6 +134,8 @@ The script is configured entirely via environment variables. Variables can also 
 | `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
 | `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `base` or `openshift`. When unset, the harness inspects `route.openshift.io` and selects `openshift` only if route resources are actually present; otherwise it uses `base`. |
 | `FORCE_PORT_FORWARD` | `false` | Force the harness to port-forward the MLflow service to `localhost:8443` even on OpenShift, instead of using the MLflow CR `status.url`. |
+| `ARTIFACTS_SERVER` | `false` | Enable the dedicated artifact Deployment. Requires PostgreSQL backend/registry stores, one S3 backend, and the `HTTPRoute` CRD. Generic Kubernetes uses a direct Service port-forward on `localhost:8444`. |
+| `ARTIFACTS_SERVER_GATEWAY` | `false` | Also require live OpenShift Gateway acceptance and run tracking-relative rewrite assertions. |
 
 ### Skip / control flags
 
@@ -177,6 +179,14 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... BUCKET=my-bucket S3_ENDPOINT_URL
 ```
 
 `deploy.py` enables `spec.traceArchival` automatically only for `s3` or `externals3` when both the backend and registry stores use PostgreSQL (same bucket, `/trace-archive` prefix, schedule `0 0 1 1 *` so the CronJob does not fire during CI). Harness-driven runs default `TRACE_ARCHIVAL_RETENTION=1m` and pass that through to the MLflow CR so the smoke suite can create several traces, persist them as DB-backed spans via OTLP `/v1/traces` (prefixed tracking URI first, then the unprefixed Kind port-forward path), run a Job from the CronJob template, and verify that archive objects appear, traces remain readable, and `SPANS_LOCATION=ARCHIVE_REPO`. S3 rows involving SQLite retain their `ReadWriteOnce` PVC and omit trace archival; the smoke test reads the deployed CR and skips when archival is not enabled.
+
+For dedicated artifact serving, the Kind CI launcher installs the pinned `HTTPRoute` CRD before the
+operator starts and the harness port-forwards `mlflow-artifacts` for direct workspace-authenticated
+upload, list, download, and multipart smoke coverage. Set `ARTIFACTS_SERVER_GATEWAY=true` only on
+OpenShift with a working data science Gateway to additionally validate route acceptance and rewrites.
+Direct local `test-run.sh` invocations on Kind must apply
+`test/crd/httproutes.gateway.networking.k8s.io.yaml` before operator startup; unlike the CI launcher,
+`test-run.sh` does not install cluster CRDs.
 
 ### PostgreSQL metadata store
 

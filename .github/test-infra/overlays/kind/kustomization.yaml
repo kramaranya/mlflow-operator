@@ -60,3 +60,10 @@ secretGenerator:
   - tls.key
   options:
     disableNameSuffixHash: true
+- name: mlflow-artifacts-tls
+  type: kubernetes.io/tls
+  files:
+  - tls.crt
+  - tls.key
+  options:
+    disableNameSuffixHash: true

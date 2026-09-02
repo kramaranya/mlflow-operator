@@ -264,14 +264,11 @@ class TestMLflowArtifacts(TestBase):
 
 
 @pytest.mark.artifacts_server
-@pytest.mark.skipif(
-    not Config.ARTIFACTS_SERVER,
-    reason="requires an ARTIFACTS_SERVER=true Gateway integration deployment",
-)
+@pytest.mark.smoke
 class TestMLflowArtifactsServer(TestBase):
-    def test_compatibility_paths_are_served_by_artifact_deployment(
+    def _create_artifact(
         self, create_user_with_permissions
-    ) -> None:
+    ) -> tuple[str, str, dict[str, object]]:
         workspace = Config.WORKSPACES[0]
         user = create_user_with_permissions(
             workspace=workspace,
@@ -302,8 +299,15 @@ class TestMLflowArtifactsServer(TestBase):
             "timeout": Config.REQUEST_TIMEOUT,
             "verify": get_requests_verify_value(),
         }
-        base_uri = get_mlflow_base_uri()
+        return run_id, artifact_name, request_args
 
+    def _exercise_artifact_paths(
+        self,
+        base_uri: str,
+        run_id: str,
+        artifact_name: str,
+        request_args: dict[str, object],
+    ) -> tuple[str, str]:
         list_response = requests.get(
             f"{base_uri}/ajax-api/2.0/mlflow/artifacts/list",
             params={"run_id": run_id},
@@ -346,6 +350,41 @@ class TestMLflowArtifactsServer(TestBase):
             **request_args,
         )
         abort_response.raise_for_status()
+        return create_mpu_path, abort_mpu_path
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER or not Config.MLFLOW_ARTIFACTS_URI,
+        reason="requires an ARTIFACTS_SERVER=true deployment with a direct artifact URI",
+    )
+    def test_direct_artifact_server_functionality(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, artifact_name, request_args = self._create_artifact(
+            create_user_with_permissions
+        )
+        self._exercise_artifact_paths(
+            Config.MLFLOW_ARTIFACTS_URI,
+            run_id,
+            artifact_name,
+            request_args,
+        )
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER or not Config.ARTIFACTS_SERVER_GATEWAY,
+        reason="requires live artifact-server Gateway rewrite validation",
+    )
+    def test_gateway_compatibility_paths_are_served_by_artifact_deployment(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, artifact_name, request_args = self._create_artifact(
+            create_user_with_permissions
+        )
+        create_mpu_path, abort_mpu_path = self._exercise_artifact_paths(
+            get_mlflow_base_uri(),
+            run_id,
+            artifact_name,
+            request_args,
+        )
 
         expected_paths = {
             "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",

@@ -482,22 +482,39 @@ keeping standalone chart deployments with SQL-backed artifact workspace stores T
 independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
 `artifactsServer.enabled` cannot both be enabled.
 
-The live compatibility test requires an OpenShift cluster with the configured Gateway and verifies
-that authenticated, workspace-scoped `/mlflow/get-artifact` and
-`/mlflow/ajax-api/2.0/mlflow/artifacts/list` requests plus a tracking-relative multipart create/abort
-flow are served by the artifact Deployment:
+The operator GitHub Kind workflow installs the `HTTPRoute` CRD before operator startup, provides
+the dedicated TLS Secret, and port-forwards the artifact Service to validate authenticated,
+workspace-scoped uploads, listing, downloads, and multipart create/abort directly. A Gateway
+controller is not required for that functional coverage.
+
+For a direct local Kind run, install the CRD before the operator starts (or restart the operator
+after installing it), then run the dedicated smoke coverage:
 
 ```bash
+kubectl apply -f test/crd/httproutes.gateway.networking.k8s.io.yaml
 ARTIFACTS_SERVER=true \
 ARTIFACT_BACKENDS=s3 \
 BACKEND_STORE=postgres \
 REGISTRY_STORE=postgres \
-INFRASTRUCTURE_PLATFORM=openshift \
-mlflow-tests/images/test-run.sh -m artifacts_server
+INFRASTRUCTURE_PLATFORM=base \
+mlflow-tests/images/test-run.sh -m "smoke and artifacts_server"
 ```
 
-The default Kind integration jobs do not run this case because installing Gateway API CRDs without
-a Gateway controller cannot validate route precedence or forwarded authentication.
+Live compatibility validation remains OpenShift-specific. It sends tracking-relative UI and
+multipart requests through the configured Gateway and verifies from access logs that the Gateway
+rewrote them to the artifact Deployment:
+
+```bash
+ARTIFACTS_SERVER=true \
+ARTIFACTS_SERVER_GATEWAY=true \
+ARTIFACT_BACKENDS=s3 \
+BACKEND_STORE=postgres \
+REGISTRY_STORE=postgres \
+INFRASTRUCTURE_PLATFORM=openshift \
+mlflow-tests/images/test-run.sh -m "smoke and artifacts_server"
+```
+
+Kind skips only the Gateway acceptance, route-precedence, and rewrite assertions.
 
 The artifact server validates `X-MLFLOW-WORKSPACE` and resolves metadata in the request workspace.
 A namespace-specific `MLflowConfig.spec.artifactRootSecret` remains a direct storage override:

@@ -32,7 +32,7 @@ package = true
 markers = [
     "smoke: Fast sanity-check tests suitable for pre-merge smoke runs",
     "Artifacts: Test artifact operations and S3 storage verification",
-    "artifacts_server: Test the dedicated artifact server through a live Gateway",
+    "artifacts_server: Test direct dedicated artifact functionality and optional live Gateway rewrites",
     "Experiments: Test experiment RBAC and management operations",
     "Models: Test registered model RBAC and management operations",
     "Traces: Test trace RBAC and direct trace-ingestion behavior",

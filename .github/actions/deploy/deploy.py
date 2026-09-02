@@ -284,6 +284,11 @@ class MLflowDeployer:
             base_params_env, "MLFLOW_OPERATOR_IMAGE", self.args.mlflow_operator_image,
             f"Setting operator image to {self.args.mlflow_operator_image}",
         )
+        if self.args.mlflow_url:
+            self._set_env_file_value(
+                base_params_env, "mlflow-url", self.args.mlflow_url,
+                f"Setting external MLflow URL to {self.args.mlflow_url}",
+            )
 
         # Generate TLS certificates before building with kustomize
         self.generate_tls_certificates()
@@ -1289,12 +1294,10 @@ class MLflowDeployer:
                 print(f"⚠️  Pod {pod_name} is not ready for log retrieval yet")
 
     def _validate_args(self):
-        # The split artifact server is deliberately constrained to the topology supported by
-        # the operator validation and exercised by the Gateway integration test.
+        # The split artifact server is constrained to the remote-storage topology supported by
+        # the operator. Gateway routing is optional for direct-Service test deployments.
         if self.args.artifacts_server:
             invalid = []
-            if self.args.platform != "openshift":
-                invalid.append("--platform openshift")
             if self.args.backend_store != "postgres":
                 invalid.append("--backend-store postgres")
             if self.args.registry_store != "postgres":
@@ -1455,6 +1458,8 @@ def main():
                        help="Full MLflow image name and tag")
     parser.add_argument("--mlflow-operator-image", default="quay.io/opendatahub/mlflow-operator:odh-stable",
                        help="Full MLflow operator image name and tag")
+    parser.add_argument("--mlflow-url", default="",
+                       help="External MLflow base URL configured on a newly deployed operator")
     parser.add_argument("--skip-operator", action="store_true", default=False,
                        help="Skip deploying the MLflow operator (assume it is already installed)")
     parser.add_argument("--skip-mlflow-cr", action="store_true", default=False,

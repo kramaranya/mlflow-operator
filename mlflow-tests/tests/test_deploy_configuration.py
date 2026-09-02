@@ -51,6 +51,45 @@ def test_trace_archival_requires_object_storage_and_remote_metadata(
     assert deployer._trace_archival_enabled() is expected
 
 
+def test_artifacts_server_allows_generic_kubernetes_direct_access() -> None:
+    deployer = object.__new__(_DEPLOY_MODULE.MLflowDeployer)
+    deployer.args = SimpleNamespace(
+        artifacts_server=True,
+        platform="base",
+        backend_store="postgres",
+        registry_store="postgres",
+        artifact_storage="s3",
+        ca_bundle_path="",
+        ca_bundle_configmap="",
+        skip_infrastructure=True,
+        postgres_tls=False,
+        seaweedfs_tls=False,
+    )
+
+    deployer._validate_args()
+
+
+def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) -> None:
+    deployer = object.__new__(_DEPLOY_MODULE.MLflowDeployer)
+    deployer.args = SimpleNamespace(
+        namespace="opendatahub",
+        mlflow_operator_image="localhost/mlflow-operator:test",
+        mlflow_url="https://localhost:8444",
+    )
+    deployer.repo_root = tmp_path
+    updates = []
+    deployer.ci_test_infra_path = lambda *parts: tmp_path.joinpath(*parts)
+    deployer._set_env_file_value = (
+        lambda path, key, value, description=None: updates.append((key, value))
+    )
+    deployer.generate_tls_certificates = lambda: None
+    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+
+    deployer.deploy_mlflow_operator()
+
+    assert ("mlflow-url", "https://localhost:8444") in updates
+
+
 @pytest.mark.parametrize(
     ("backend_store", "registry_store", "expected"),
     [
