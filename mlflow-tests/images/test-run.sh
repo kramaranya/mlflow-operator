@@ -437,19 +437,19 @@ fi
 if [ "$ARTIFACTS_SERVER" = "true" ]; then
     if [ "$INFRASTRUCTURE_PLATFORM" != "openshift" ]; then
         echo "ERROR: ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster." >&2
-        exit 1
+        fail_run "test_config" "ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster."
     fi
     if [ "$FORCE_PORT_FORWARD" = "true" ]; then
         echo "ERROR: ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
-        exit 1
+        fail_run "test_config" "ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway."
     fi
     if [ "$BACKEND_STORE" != "postgres" ] || [ "$REGISTRY_STORE" != "postgres" ]; then
         echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
-        exit 1
+        fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
     fi
     if [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ] || { [ "${_resolved_backends[0]}" != "s3" ] && [ "${_resolved_backends[0]}" != "externals3" ]; }; then
         echo "ERROR: ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend." >&2
-        exit 1
+        fail_run "test_config" "ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend."
     fi
     SERVE_ARTIFACTS=false
 fi

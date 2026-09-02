@@ -1,5 +1,10 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from xml.etree.ElementTree import parse
+
+import pytest
 
 from write_harness_junit import harness_junit_path, write_harness_error_junit
 
@@ -52,3 +57,81 @@ def test_write_harness_error_junit_does_not_overwrite_existing(tmp_path: Path) -
 
     assert wrote is False
     assert output.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_message"),
+    [
+        (
+            {"INFRASTRUCTURE_PLATFORM": "base"},
+            "ARTIFACTS_SERVER=true requires a Gateway-capable OpenShift cluster.",
+        ),
+        (
+            {"FORCE_PORT_FORWARD": "true"},
+            "ARTIFACTS_SERVER=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway.",
+        ),
+        (
+            {"BACKEND_STORE": "sqlite"},
+            "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres.",
+        ),
+        (
+            {"ARTIFACT_BACKENDS": "file"},
+            "ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend.",
+        ),
+    ],
+    ids=["non-openshift", "port-forward", "sqlite-metadata", "non-s3-backend"],
+)
+def test_invalid_artifacts_server_config_writes_harness_junit(
+    tmp_path: Path, overrides: dict[str, str], expected_message: str
+) -> None:
+    bash = shutil.which("bash")
+    if bash is None or subprocess.run(
+        [bash, "-c", "type mapfile >/dev/null 2>&1"], check=False
+    ).returncode:
+        pytest.skip("test-run.sh requires Bash with mapfile support")
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_kubectl = fake_bin / "kubectl"
+    fake_kubectl.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_kubectl.chmod(0o755)
+
+    results_dir = tmp_path / "results"
+    env = os.environ.copy()
+    env.pop("DB_TYPE", None)
+    env.update(
+        {
+            "PATH": f"{fake_bin}{os.pathsep}{env['PATH']}",
+            "TEST_RESULTS_DIR": str(results_dir),
+            "MLFLOW_TEST_SUPPORTED_VERSION": "3.14",
+            "SUPPORTED_MLFLOW_VERSION_RAW": "3.14.0",
+            "ARTIFACTS_SERVER": "true",
+            "INFRASTRUCTURE_PLATFORM": "openshift",
+            "FORCE_PORT_FORWARD": "false",
+            "SKIP_CLEANUP": "false",
+            "CLEANUP_REUSED_RESOURCES": "false",
+            "BACKEND_STORE": "postgres",
+            "REGISTRY_STORE": "postgres",
+            "ARTIFACT_BACKENDS": "s3",
+        }
+    )
+    env.update(overrides)
+
+    result = subprocess.run(
+        [bash, str(Path(__file__).with_name("test-run.sh"))],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert expected_message in result.stderr
+    reports = list(results_dir.glob("xunit_report*.xml"))
+    assert len(reports) == 1
+    test_case = parse(reports[0]).getroot().find("./testsuite/testcase")
+    assert test_case is not None
+    assert test_case.get("name") == "test_config"
+    error = test_case.find("error")
+    assert error is not None
+    assert error.get("message") == expected_message
