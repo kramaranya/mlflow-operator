@@ -99,13 +99,15 @@ Operator / OpenShift:
                           even on OpenShift (default: false)
   ARTIFACTS_SERVER        true|false — enable and test the dedicated metadata-aware artifact
                           server (default: false). Requires the HTTPRoute API, PostgreSQL
-                          backend/registry stores, and one S3 backend. Generic Kubernetes
+                          backend/registry stores, and file, s3, or externals3 artifacts.
+                          Normal runs may exercise multiple artifact backends. Generic Kubernetes
                           accesses the artifact Service through localhost:8444.
   ARTIFACTS_SERVER_GATEWAY true|false — validate live Gateway route acceptance and rewrites
                           (default: false). Requires ARTIFACTS_SERVER=true and OpenShift.
 
 Skip / control flags:
-  SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false)
+  SKIP_DEPLOYMENT       true|false — skip all cluster deployment (default: false).
+                        Requires exactly one backend matching the reused MLflow CR.
   SKIP_OPERATOR         true|false — skip operator deployment only (default: false)
   SKIP_INFRASTRUCTURE   true|false — skip PostgreSQL/SeaweedFS deployment (default: false)
   SKIP_CLEANUP          true|false — leave resources in place after the run (default: false).
@@ -385,11 +387,17 @@ STORAGE_TYPE_CONFIGURED=false
 [ -n "${ARTIFACT_BACKENDS+x}" ] && ARTIFACT_BACKENDS_CONFIGURED=true
 [ -n "${STORAGE_TYPE+x}" ] && STORAGE_TYPE_CONFIGURED=true
 
-# Suites to run.  Each entry is an artifact storage backend (file|s3); the script
+# Suites to run. Each entry is an artifact storage backend (file|s3|externals3); the script
 # deploys a fresh MLflow CR per suite, runs the full test suite, then tears it down.
 # Backward compatibility: STORAGE_TYPE=<type> (old single-suite interface) is honoured
 # when ARTIFACT_BACKENDS is not explicitly set.
-ARTIFACT_BACKENDS="${ARTIFACT_BACKENDS:-${STORAGE_TYPE:-file,s3}}"
+if ! $ARTIFACT_BACKENDS_CONFIGURED; then
+    if $STORAGE_TYPE_CONFIGURED; then
+        ARTIFACT_BACKENDS="${STORAGE_TYPE}"
+    else
+        ARTIFACT_BACKENDS="file,s3"
+    fi
+fi
 # STORAGE_TYPE is set per-iteration by the main loop; this default is only used if
 # run_suite is somehow called outside the loop (e.g. during development/debugging).
 STORAGE_TYPE="${STORAGE_TYPE:-file}"
@@ -411,12 +419,43 @@ if [ -n "$INFERRED_UPGRADE_PHASE" ]; then
     STORAGE_TYPE="$ARTIFACT_BACKENDS"
 fi
 
+_compact_artifact_backends="$(printf '%s' "$ARTIFACT_BACKENDS" | tr -d '[:space:]')"
+case "$_compact_artifact_backends" in
+    ,*|*,|*,,*)
+        echo "ERROR: ARTIFACT_BACKENDS must not contain empty entries." >&2
+        fail_run "test_config" "ARTIFACT_BACKENDS must not contain empty entries."
+        ;;
+esac
+
 mapfile -t _resolved_backends < <(printf '%s\n' "$ARTIFACT_BACKENDS" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')
 ARTIFACT_BACKEND_COUNT="${#_resolved_backends[@]}"
+
+if [ "$ARTIFACT_BACKEND_COUNT" -eq 0 ]; then
+    echo "ERROR: ARTIFACT_BACKENDS must contain at least one of: file, s3, externals3." >&2
+    fail_run "test_config" "ARTIFACT_BACKENDS must contain at least one of: file, s3, externals3."
+fi
+for artifact_backend in "${_resolved_backends[@]}"; do
+    case "$artifact_backend" in
+        file|s3|externals3) ;;
+        *)
+            echo "ERROR: Unsupported ARTIFACT_BACKENDS value: '${artifact_backend}'. Supported: file, s3, externals3." >&2
+            fail_run "test_config" "Unsupported ARTIFACT_BACKENDS value: '${artifact_backend}'. Supported: file, s3, externals3."
+            ;;
+    esac
+    if [ "$artifact_backend" = "externals3" ] && \
+       { [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${BUCKET:-}" ]; }; then
+        echo "ERROR: externals3 requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and BUCKET." >&2
+        fail_run "test_config" "externals3 requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and BUCKET."
+    fi
+done
 
 if [ "$SKIP_CLEANUP" = "true" ] && [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ]; then
     echo "ERROR: SKIP_CLEANUP=true requires exactly one backend via ARTIFACT_BACKENDS or STORAGE_TYPE." >&2
     fail_run "test_config" "SKIP_CLEANUP=true requires exactly one backend via ARTIFACT_BACKENDS or STORAGE_TYPE."
+fi
+if [ "$SKIP_DEPLOYMENT" = "true" ] && [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ]; then
+    echo "ERROR: SKIP_DEPLOYMENT=true requires exactly one backend matching the reused MLflow deployment." >&2
+    fail_run "test_config" "SKIP_DEPLOYMENT=true requires exactly one backend matching the reused MLflow deployment."
 fi
 
 case "$CLEANUP_REUSED_RESOURCES" in
@@ -447,14 +486,20 @@ if [ "$ARTIFACTS_SERVER" = "true" ]; then
         echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway." >&2
         fail_run "test_config" "ARTIFACTS_SERVER_GATEWAY=true cannot use FORCE_PORT_FORWARD; the test must traverse the Gateway."
     fi
-    if [ "$BACKEND_STORE" != "postgres" ] || [ "$REGISTRY_STORE" != "postgres" ]; then
-        echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
-        fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
-    fi
-    if [ "$ARTIFACT_BACKEND_COUNT" -ne 1 ] || { [ "${_resolved_backends[0]}" != "s3" ] && [ "${_resolved_backends[0]}" != "externals3" ]; }; then
-        echo "ERROR: ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend." >&2
-        fail_run "test_config" "ARTIFACTS_SERVER=true requires exactly one s3 or externals3 artifact backend."
-    fi
+    case "$BACKEND_STORE" in
+        postgres|postgresql) ;;
+        *)
+            echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
+            fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
+            ;;
+    esac
+    case "$REGISTRY_STORE" in
+        postgres|postgresql) ;;
+        *)
+            echo "ERROR: ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres." >&2
+            fail_run "test_config" "ARTIFACTS_SERVER=true requires BACKEND_STORE=postgres and REGISTRY_STORE=postgres."
+            ;;
+    esac
     SERVE_ARTIFACTS=false
 elif [ "$ARTIFACTS_SERVER_GATEWAY" = "true" ]; then
     echo "ERROR: ARTIFACTS_SERVER_GATEWAY=true requires ARTIFACTS_SERVER=true." >&2

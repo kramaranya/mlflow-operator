@@ -301,13 +301,13 @@ class TestMLflowArtifactsServer(TestBase):
         }
         return run_id, artifact_name, request_args
 
-    def _exercise_artifact_paths(
+    def _exercise_common_artifact_paths(
         self,
         base_uri: str,
         run_id: str,
         artifact_name: str,
         request_args: dict[str, object],
-    ) -> tuple[str, str]:
+    ) -> None:
         list_response = requests.get(
             f"{base_uri}/ajax-api/2.0/mlflow/artifacts/list",
             params={"run_id": run_id},
@@ -327,6 +327,12 @@ class TestMLflowArtifactsServer(TestBase):
         download_response.raise_for_status()
         assert download_response.text == self.test_context.temp_artifact_content
 
+    def _exercise_multipart_paths(
+        self,
+        base_uri: str,
+        run_id: str,
+        request_args: dict[str, object],
+    ) -> tuple[str, str]:
         mpu_artifact_path = f"{self.test_context.active_experiment_id}/{run_id}"
         mpu_file = "probe.bin"
         create_mpu_path = (
@@ -352,46 +358,7 @@ class TestMLflowArtifactsServer(TestBase):
         abort_response.raise_for_status()
         return create_mpu_path, abort_mpu_path
 
-    @pytest.mark.skipif(
-        not Config.ARTIFACTS_SERVER or not Config.MLFLOW_ARTIFACTS_URI,
-        reason="requires an ARTIFACTS_SERVER=true deployment with a direct artifact URI",
-    )
-    def test_direct_artifact_server_functionality(
-        self, create_user_with_permissions
-    ) -> None:
-        run_id, artifact_name, request_args = self._create_artifact(
-            create_user_with_permissions
-        )
-        self._exercise_artifact_paths(
-            Config.MLFLOW_ARTIFACTS_URI,
-            run_id,
-            artifact_name,
-            request_args,
-        )
-
-    @pytest.mark.skipif(
-        not Config.ARTIFACTS_SERVER or not Config.ARTIFACTS_SERVER_GATEWAY,
-        reason="requires live artifact-server Gateway rewrite validation",
-    )
-    def test_gateway_compatibility_paths_are_served_by_artifact_deployment(
-        self, create_user_with_permissions
-    ) -> None:
-        run_id, artifact_name, request_args = self._create_artifact(
-            create_user_with_permissions
-        )
-        create_mpu_path, abort_mpu_path = self._exercise_artifact_paths(
-            get_mlflow_base_uri(),
-            run_id,
-            artifact_name,
-            request_args,
-        )
-
-        expected_paths = {
-            "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",
-            "/mlflow-artifacts/get-artifact",
-            f"/mlflow-artifacts{create_mpu_path}",
-            f"/mlflow-artifacts{abort_mpu_path}",
-        }
+    def _assert_artifact_deployment_logged_paths(self, expected_paths: set[str]) -> None:
         deadline = time.monotonic() + 30
         observed_paths = set()
         while time.monotonic() < deadline and observed_paths != expected_paths:
@@ -414,4 +381,82 @@ class TestMLflowArtifactsServer(TestBase):
         assert observed_paths == expected_paths, (
             "artifact Deployment access logs did not record all Gateway-rewritten requests; "
             f"observed {sorted(observed_paths)}"
+        )
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER or not Config.MLFLOW_ARTIFACTS_URI,
+        reason="requires an ARTIFACTS_SERVER=true deployment with a direct artifact URI",
+    )
+    def test_direct_artifact_server_functionality(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, artifact_name, request_args = self._create_artifact(
+            create_user_with_permissions
+        )
+        self._exercise_common_artifact_paths(
+            Config.MLFLOW_ARTIFACTS_URI,
+            run_id,
+            artifact_name,
+            request_args,
+        )
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER
+        or not Config.MLFLOW_ARTIFACTS_URI
+        or Config.ARTIFACT_STORAGE != "s3",
+        reason="requires an S3-backed artifact server with a direct artifact URI",
+    )
+    def test_direct_artifact_server_multipart_functionality(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, _, request_args = self._create_artifact(create_user_with_permissions)
+        self._exercise_multipart_paths(
+            Config.MLFLOW_ARTIFACTS_URI,
+            run_id,
+            request_args,
+        )
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER or not Config.ARTIFACTS_SERVER_GATEWAY,
+        reason="requires live artifact-server Gateway rewrite validation",
+    )
+    def test_gateway_compatibility_paths_are_served_by_artifact_deployment(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, artifact_name, request_args = self._create_artifact(
+            create_user_with_permissions
+        )
+        self._exercise_common_artifact_paths(
+            get_mlflow_base_uri(),
+            run_id,
+            artifact_name,
+            request_args,
+        )
+        self._assert_artifact_deployment_logged_paths(
+            {
+                "/mlflow-artifacts/ajax-api/2.0/mlflow/artifacts/list",
+                "/mlflow-artifacts/get-artifact",
+            }
+        )
+
+    @pytest.mark.skipif(
+        not Config.ARTIFACTS_SERVER
+        or not Config.ARTIFACTS_SERVER_GATEWAY
+        or Config.ARTIFACT_STORAGE != "s3",
+        reason="requires live S3 multipart Gateway rewrite validation",
+    )
+    def test_gateway_multipart_paths_are_served_by_artifact_deployment(
+        self, create_user_with_permissions
+    ) -> None:
+        run_id, _, request_args = self._create_artifact(create_user_with_permissions)
+        create_mpu_path, abort_mpu_path = self._exercise_multipart_paths(
+            get_mlflow_base_uri(),
+            run_id,
+            request_args,
+        )
+        self._assert_artifact_deployment_logged_paths(
+            {
+                f"/mlflow-artifacts{create_mpu_path}",
+                f"/mlflow-artifacts{abort_mpu_path}",
+            }
         )

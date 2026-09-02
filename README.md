@@ -482,10 +482,11 @@ keeping standalone chart deployments with SQL-backed artifact workspace stores T
 independently; artifact resources inherit the main server resources when omitted. `serveArtifacts` and
 `artifactsServer.enabled` cannot both be enabled.
 
-The operator GitHub Kind workflow installs the `HTTPRoute` CRD before operator startup, provides
-the dedicated TLS Secret, and port-forwards the artifact Service to validate authenticated,
-workspace-scoped uploads, listing, downloads, and multipart create/abort directly. A Gateway
-controller is not required for that functional coverage.
+The operator GitHub Kind workflow runs independent PostgreSQL/file and PostgreSQL/S3 jobs. Both
+install the `HTTPRoute` CRD before operator startup, provide the dedicated TLS Secret, and
+port-forward the artifact Service to validate authenticated, workspace-scoped uploads, listing,
+and downloads. The S3 job additionally validates multipart create/abort. A Gateway controller is
+not required for that functional coverage.
 
 For a direct local Kind run, install the CRD before the operator starts (or restart the operator
 after installing it), then run the dedicated smoke coverage:
@@ -493,12 +494,15 @@ after installing it), then run the dedicated smoke coverage:
 ```bash
 kubectl apply -f test/crd/httproutes.gateway.networking.k8s.io.yaml
 ARTIFACTS_SERVER=true \
-ARTIFACT_BACKENDS=s3 \
+ARTIFACT_BACKENDS=file \
 BACKEND_STORE=postgres \
 REGISTRY_STORE=postgres \
 INFRASTRUCTURE_PLATFORM=base \
 mlflow-tests/images/test-run.sh -m "smoke and artifacts_server"
 ```
+
+Use `ARTIFACT_BACKENDS=s3` to include multipart API coverage, or `file,s3` to run both backends
+sequentially. Upgrade and preserved-resource runs still require exactly one artifact backend.
 
 Live compatibility validation remains OpenShift-specific. It sends tracking-relative UI and
 multipart requests through the configured Gateway and verifies from access logs that the Gateway

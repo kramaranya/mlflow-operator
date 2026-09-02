@@ -891,15 +891,13 @@ class MLflowDeployer:
                 }
         else:
             # File-based artifact storage
-            # IMPORTANT: MLflow operator validation requires serveArtifacts=true when using file-based storage
+            # File storage is served by tracking unless the dedicated server owns it.
             if self.args.artifacts_destination.startswith("file://"):
-                # Force serveArtifacts to true for file-based storage to pass operator validation
-                if self.args.serve_artifacts == "false":
+                if self.args.serve_artifacts == "false" and not self.args.artifacts_server:
                     print("⚠️  Warning: Forcing serveArtifacts=true because file-based storage requires it")
                     mlflow_cr["spec"]["serveArtifacts"] = True
-                    # Don't set defaultArtifactRoot when serving artifacts from file storage
                 else:
-                    mlflow_cr["spec"]["serveArtifacts"] = True
+                    mlflow_cr["spec"]["serveArtifacts"] = not self.args.artifacts_server
             else:
                 # Non-file storage (e.g., hdfs://, etc.) - use original serve_artifacts value
                 mlflow_cr["spec"]["serveArtifacts"] = str(self.args.serve_artifacts).lower() == "true"
@@ -1296,16 +1294,16 @@ class MLflowDeployer:
                 print(f"⚠️  Pod {pod_name} is not ready for log retrieval yet")
 
     def _validate_args(self):
-        # The split artifact server is constrained to the remote-storage topology supported by
-        # the operator. Gateway routing is optional for direct-Service test deployments.
+        # Split serving requires remote metadata. Gateway routing is optional for
+        # direct-Service test deployments, and artifacts may use any supported destination.
         if self.args.artifacts_server:
             invalid = []
             if self.args.backend_store != "postgres":
                 invalid.append("--backend-store postgres")
             if self.args.registry_store != "postgres":
                 invalid.append("--registry-store postgres")
-            if self.args.artifact_storage not in ("s3", "externals3"):
-                invalid.append("--artifact-storage s3 or externals3")
+            if self.args.artifact_storage not in ("file", "s3", "externals3"):
+                invalid.append("--artifact-storage file, s3, or externals3")
             if invalid:
                 raise ValueError(
                     "--artifacts-server requires " + ", ".join(invalid)

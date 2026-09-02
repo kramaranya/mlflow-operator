@@ -52,14 +52,20 @@ def test_trace_archival_requires_object_storage_and_remote_metadata(
     assert deployer._trace_archival_enabled() is expected
 
 
-def test_artifacts_server_allows_generic_kubernetes_direct_access() -> None:
+@pytest.mark.parametrize("artifact_storage", ["file", "s3", "externals3"])
+def test_artifacts_server_allows_supported_artifact_storage(
+    artifact_storage: str,
+) -> None:
     deployer = object.__new__(_DEPLOY_MODULE.MLflowDeployer)
     deployer.args = SimpleNamespace(
         artifacts_server=True,
         platform="base",
         backend_store="postgres",
         registry_store="postgres",
-        artifact_storage="s3",
+        artifact_storage=artifact_storage,
+        s3_access_key="test-access-key",
+        s3_secret_key="test-secret-key",
+        s3_bucket="test-bucket",
         ca_bundle_path="",
         ca_bundle_configmap="",
         skip_infrastructure=True,
@@ -68,6 +74,41 @@ def test_artifacts_server_allows_generic_kubernetes_direct_access() -> None:
     )
 
     deployer._validate_args()
+
+
+def test_generated_file_cr_enables_split_serving_with_persistent_storage() -> None:
+    deployer = object.__new__(_DEPLOY_MODULE.MLflowDeployer)
+    deployer.args = SimpleNamespace(
+        backend_store="postgres",
+        registry_store="postgres",
+        artifact_storage="file",
+        namespace="opendatahub",
+        mlflow_image="localhost/mlflow:test",
+        backend_store_uri="sqlite:////mlflow/mlflow.db",
+        registry_store_uri="sqlite:////mlflow/mlflow.db",
+        serve_artifacts="false",
+        artifacts_destination="file:///mlflow/artifacts",
+        artifacts_server=True,
+        workspace_label_selector="",
+        ca_bundle_configmap="",
+        ca_bundle_path="",
+    )
+    deployer._tls_ca_bundle_cm = None
+    deployer._ca_cert_pem = None
+    deployer.run_command = lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "", "")
+    deployer.wait_for_deployment_to_exist = lambda *args, **kwargs: None
+    deployer.wait_for_mlflow_ready = lambda *args, **kwargs: None
+
+    deployer.deploy_mlflow()
+
+    spec = yaml.safe_load(Path("/tmp/mlflow-cr.yaml").read_text())["spec"]
+    assert spec["backendStoreUriFrom"]["name"] == "mlflow-db-credentials"
+    assert spec["registryStoreUriFrom"]["name"] == "mlflow-db-credentials"
+    assert spec["artifactsDestination"] == "file:///mlflow/artifacts"
+    assert spec["artifactsServer"] == {"enabled": True}
+    assert spec["serveArtifacts"] is False
+    assert spec["storage"]["accessModes"] == ["ReadWriteOnce"]
+    assert "defaultArtifactRoot" not in spec
 
 
 def test_kind_operator_deployment_applies_mlflow_url_override(tmp_path: Path) -> None:

@@ -103,7 +103,7 @@ The script is configured entirely via environment variables. Variables can also 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `STORAGE_TYPE` | `file` | Artifact storage backend. Supported: `file`, `s3`. |
+| `STORAGE_TYPE` | `file` | Legacy single artifact storage backend. Supported: `file`, `s3`, `externals3`. Prefer `ARTIFACT_BACKENDS`. |
 | `BACKEND_STORE` | `sqlite` | Backend store type. Supported: `sqlite`, `postgres`. |
 | `REGISTRY_STORE` | `sqlite` | Registry store type. Supported: `sqlite`, `postgres`. |
 | `AWS_ACCESS_KEY_ID` | _(unset)_ | S3 access key (`STORAGE_TYPE=s3` only). |
@@ -134,14 +134,14 @@ The script is configured entirely via environment variables. Variables can also 
 | `MLFLOW_OPERATOR_BRANCH` | `main` | Branch to pull manifests from for CSV patching. |
 | `INFRASTRUCTURE_PLATFORM` | _(auto)_ | Infrastructure overlay: `base` or `openshift`. When unset, the harness inspects `route.openshift.io` and selects `openshift` only if route resources are actually present; otherwise it uses `base`. |
 | `FORCE_PORT_FORWARD` | `false` | Force the harness to port-forward the MLflow service to `localhost:8443` even on OpenShift, instead of using the MLflow CR `status.url`. |
-| `ARTIFACTS_SERVER` | `false` | Enable the dedicated artifact Deployment. Requires PostgreSQL backend/registry stores, one S3 backend, and the `HTTPRoute` CRD. Generic Kubernetes uses a direct Service port-forward on `localhost:8444`. |
+| `ARTIFACTS_SERVER` | `false` | Enable the dedicated artifact Deployment. Requires PostgreSQL backend/registry stores, one or more `file`, `s3`, or `externals3` backends, and the `HTTPRoute` CRD. Normal runs may use multiple backends; generic Kubernetes uses a direct Service port-forward on `localhost:8444`. |
 | `ARTIFACTS_SERVER_GATEWAY` | `false` | Also require live OpenShift Gateway acceptance and run tracking-relative rewrite assertions. |
 
 ### Skip / control flags
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SKIP_DEPLOYMENT` | `false` | Skip all cluster deployment (use pre-existing resources). |
+| `SKIP_DEPLOYMENT` | `false` | Skip all cluster deployment and use pre-existing resources. Requires exactly one backend matching the reused MLflow CR. |
 | `SKIP_OPERATOR` | `false` | Skip operator deployment only. |
 | `SKIP_INFRASTRUCTURE` | `false` | Skip PostgreSQL/SeaweedFS deployment. |
 | `SKIP_CLEANUP` | `false` | Leave the deployment in place after the run. Requires exactly one backend; use it for inspection or later reuse. |
@@ -168,6 +168,18 @@ Uses SQLite for metadata and a local PVC for artifacts. Suitable for quick local
 ```bash
 STORAGE_TYPE=file BACKEND_STORE=sqlite REGISTRY_STORE=sqlite bash images/test-run.sh
 ```
+
+Dedicated split serving keeps file artifacts on the PVC but requires remote SQL metadata:
+
+```bash
+ARTIFACTS_SERVER=true ARTIFACT_BACKENDS=file \
+  BACKEND_STORE=postgres REGISTRY_STORE=postgres \
+  bash images/test-run.sh -m "smoke and artifacts_server"
+```
+
+The common split-serving smoke checks cover upload, list, and download for file and S3-compatible
+destinations. Multipart create/abort checks run only for S3-compatible storage. Normal runs may set
+`ARTIFACT_BACKENDS=file,s3`; upgrade phases and `SKIP_CLEANUP=true` remain single-backend flows.
 
 ### S3 artifact storage
 

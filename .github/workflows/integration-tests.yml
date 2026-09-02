@@ -5,8 +5,8 @@ name: MLflow Runtime Integration Tests
 #
 # Sync note: the base integration-test matrix lives in mlflow-tests/ci/integration-matrix.json
 # and is also consumed by opendatahub-io/mlflow .github/workflows/operator-integration-tests.yml.
-# This workflow adds one operator-PR-only artifact-server row until the companion workflow forwards
-# that mode. Keep the remaining env vars, action versions, and script calls in sync across both files.
+# This workflow adds operator-PR-only file and S3 artifact-server rows until the companion workflow
+# forwards that mode. Keep the remaining env vars, action versions, and script calls in sync.
 
 env:
   NAMESPACE: opendatahub
@@ -69,15 +69,26 @@ jobs:
             # The false axis makes the true include additive; without it GitHub merges the
             # include into the existing PostgreSQL/S3/serve=false row and drops that coverage.
             .artifacts_server = ["false"] |
-            .include += [{
-              "k8s_version": "v1.34.0",
-              "backend_store": "postgres",
-              "artifact_backends": "s3",
-              "serve_artifacts": "false",
-              "registry_store": "postgres",
-              "artifacts_server": "true",
-              "pytest_mark_expression": "smoke and artifacts_server"
-            }]
+            .include += [
+              {
+                "k8s_version": "v1.34.0",
+                "backend_store": "postgres",
+                "artifact_backends": "file",
+                "serve_artifacts": "false",
+                "registry_store": "postgres",
+                "artifacts_server": "true",
+                "pytest_mark_expression": "smoke and artifacts_server"
+              },
+              {
+                "k8s_version": "v1.34.0",
+                "backend_store": "postgres",
+                "artifact_backends": "s3",
+                "serve_artifacts": "false",
+                "registry_store": "postgres",
+                "artifacts_server": "true",
+                "pytest_mark_expression": "smoke and artifacts_server"
+              }
+            ]
           ' mlflow-tests/ci/integration-matrix.json)"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 

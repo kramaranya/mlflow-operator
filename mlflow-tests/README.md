@@ -115,11 +115,11 @@ uv run pytest --log-cli-level=INFO
 uv run pytest tests/test_experiments.py -k "GET permission can get experiment"
 ```
 
-The operator GitHub workflow includes an `ARTIFACTS_SERVER=true` PostgreSQL/S3 Kind row. It installs
-the repository's pinned `HTTPRoute` CRD before operator startup, provides the artifact TLS Secret,
-and port-forwards the `mlflow-artifacts` Service. The direct smoke test covers workspace
-authentication, upload, listing, download, and multipart create/abort without requiring a Gateway
-controller.
+The operator GitHub workflow includes independent `ARTIFACTS_SERVER=true` PostgreSQL/file and
+PostgreSQL/S3 Kind rows. They install the repository's pinned `HTTPRoute` CRD before operator
+startup, provide the artifact TLS Secret, and port-forward the `mlflow-artifacts` Service. Both
+direct smoke tests cover workspace authentication, upload, listing, and download; the S3 row also
+covers multipart create/abort. A Gateway controller is not required.
 
 When invoking `images/test-run.sh` directly on Kind, install the CRD before the operator starts (or
 restart the operator after installation):
@@ -127,12 +127,15 @@ restart the operator after installation):
 ```bash
 kubectl apply -f ../test/crd/httproutes.gateway.networking.k8s.io.yaml
 ARTIFACTS_SERVER=true \
-ARTIFACT_BACKENDS=s3 \
+ARTIFACT_BACKENDS=file \
 BACKEND_STORE=postgres \
 REGISTRY_STORE=postgres \
 INFRASTRUCTURE_PLATFORM=base \
 bash images/test-run.sh -m "smoke and artifacts_server"
 ```
+
+Set `ARTIFACT_BACKENDS=s3` for multipart coverage or `ARTIFACT_BACKENDS=file,s3` for a normal
+sequential run across both destinations. Upgrade phases and `SKIP_CLEANUP=true` require one backend.
 
 On OpenShift, enable the independent live Gateway rewrite assertions when the operator has the
 external `MLFLOW_URL` and `data-science-gateway` configured:
