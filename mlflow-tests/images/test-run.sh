@@ -663,6 +663,8 @@ wait_for_artifacts_server_route() {
         --namespace "$NAMESPACE" --timeout=300s; then
         echo "ERROR: mlflow-artifacts Deployment did not become available" >&2
         collect_debug_logs "artifact deployment readiness failure"
+        fail_suite "test_wait_for_artifacts_server_route" \
+            "mlflow-artifacts Deployment did not become available"
         return 1
     fi
 
@@ -677,6 +679,8 @@ wait_for_artifacts_server_route() {
         if [ "$retry" -ge "$max_retries" ]; then
             echo "ERROR: mlflow-artifacts HTTPRoute was not accepted within timeout" >&2
             collect_debug_logs "artifact route acceptance failure"
+            fail_suite "test_wait_for_artifacts_server_route" \
+                "mlflow-artifacts HTTPRoute was not accepted within timeout"
             return 1
         fi
         sleep 5
@@ -691,6 +695,8 @@ wait_for_artifacts_server_route() {
         if [ "$retry" -ge "$max_retries" ]; then
             echo "ERROR: MLflow CR status.artifactsUrl is empty with ARTIFACTS_SERVER=true" >&2
             collect_debug_logs "artifact route URL failure"
+            fail_suite "test_wait_for_artifacts_server_route" \
+                "MLflow CR status.artifactsUrl is empty with ARTIFACTS_SERVER=true"
             return 1
         fi
         sleep 5
